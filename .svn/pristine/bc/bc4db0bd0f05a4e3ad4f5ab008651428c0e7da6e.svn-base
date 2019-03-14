@@ -1,0 +1,218 @@
+local client_request =  require "client_request"
+local common = require "common"
+local playercommon = require "playercommon"
+local static_func = require "static_function"
+local timext = require "timext"
+local interaction = require "interaction"
+local cacheinterface = require "cacheinterface"
+local chatcommon = require "chatcommon"
+local clusterext = require "clusterext"
+local gamelog = require "gamelog"
+local cacheinterface = require "cacheinterface"
+local httprequest = require "httprequest"
+local config = require "config"
+local thingcommon = require "thingcommon"
+local weightwrap = require "weightwrap"
+local thinginterface = require "thinginterface"
+
+--消息返回码
+local message_code = {
+    unkown = 0,
+    success = 1,
+    no_found_language = 2,--没有找到该语言
+    no_found_face = 3,--没有找到头像
+    unuse_face = 4,--无法使用的头像
+    less_xianyu = 5,--仙玉不足
+    escape_string = 6,--非法字符
+    shield_word = 7,--屏蔽词
+    same_face = 8,--相同的头像
+    same_name = 9,--相同的名字
+    less_point = 10,--属性点不足
+    less_yinliang = 11, --缺少银两
+    no_dual_point = 12, --没有多套属性点方案
+    same_active_point = 13, --已经是激活的加点方案
+    same_role_id = 14,--相同的职业
+    chg_profession_cd = 15,--转职cd
+    less_item = 16,--道具不足
+    error_item = 17,--错误的道具
+    less_point = 18,--属性点不足以重置
+    less_exp = 19,--经验不足
+    exchange_point_limit = 20,--兑换属性点上限
+    no_skill = 21,--没有找到技能
+    max_skilllevel = 22,--技能等级上限
+    no_deploy = 23,--没有找到配置
+    max_rei = 24,--已达到最大转生次数
+    less_level = 25,--等级不足
+    less_skill_level = 26,--技能等级不足
+    error_badge = 27,--错误的徽章数据
+    have_create_role = 28,--已经创建过
+    not_found_player = 29,--没有找到玩家
+    used_name = 30,--名字已被使用
+	task_not_finsh=31, --任务没完成
+    have_bind = 32,--已经绑定
+    invalid_token = 33,--失效token
+    error_platform = 34,--错误的平台
+    error_bind = 35,--设备和平台均有游戏帐号无法绑定
+    nend_break_marry = 36,  --需要先离婚
+    max_level = 37,--已达到最大等级
+    max_vitality = 38,--活力上限
+    less_vitality = 39,--活力不足
+    bag_full = 40,--背包已满
+    max_baoshidu = 41,--饱食度满了
+    no_reward = 42,--没有奖励
+    learned_skill = 43,--已经学会技能了
+    error_box = 44,--错误的宝箱
+    have_collecter = 45,--已经有人来采集了
+    in_collect = 46,--正在采集
+    less_shigong = 47,--缺少师贡
+    passive_item_max = 48,--修炼丹使用上限
+}
+
+function client_request.reqrolebase(player, msg)
+    local base = player:playerbasemodule()
+    local tempinfo = base:get_role_message()
+    base.cacheinfo = table.copy(tempinfo, true)
+    return { 
+        info = base.cacheinfo,
+    }
+end
+
+function client_request.createrole(player, msg)
+    local code = message_code.have_create_role
+    if not player:is_create_role() then
+        local name = msg.name .. math.floor(player:getplayerid() % common.player_section)
+        player:create(player:getaccount(), name, msg.roleid)
+        player:init()--初始化
+        player:init_service()
+        player:online()--登录
+        code = message_code.success
+
+        httprequest.create_role(player)
+    end
+    return {code = code, name = msg.name, roleid = msg.roleid}
+end
+
+--请求系统基础信息
+function client_request.reqsysteminit(player, msg)
+    local serverconfig = config.get_server_config()
+    return { current = timext.current_time(), gmt = serverconfig.gmt }
+end
+
+--心跳包
+function client_request.keepalive(player, msg)
+    return { current = timext.current_time() }
+end
+
+function client_request.entergameok(player, msg)
+    player:enter_game_ok()
+    return { code = message_code.success }
+end
+
+--改名
+local function changerolename_cb(ret, player, msg)
+    local code = message_code.unkown
+    if ret then
+        code = message_code.used_name
+    else
+        --验证货币
+        local lastname = player:playerbasemodule():get_lastname()
+        code = message_code.success
+        if lastname and string.len(lastname) > 0 then --第一次改名  免费
+            local token = player:tokenmodule():gettoken("XianYu")
+            if token < get_static_config().globals.changename_cost then
+                code = message_code.less_xianyu
+            end
+            --成功
+            player:tokenmodule():subtoken("XianYu", get_static_config().globals.changename_cost, object_action.action5001)
+        end
+        if code == message_code.success then
+            local oldname = player:playerbasemodule():get_name()
+            player:playerbasemodule():change_name(msg.name)
+            code = message_code.success
+        end
+    end
+    player:send_request("changerolenameret", { code = code, name = msg.name })
+end
+function client_request.changerolename(player, msg)
+    local base = player:playerbasemodule()
+    local oldname = base:get_name()
+    local code = message_code.unkown
+    if string.len(msg.name) <= 0 then
+
+    elseif msg.name == oldname then
+        code = message_code.same_name
+    elseif common.check_shield_word(msg.name) then --验证屏蔽词
+        code = message_code.shield_word
+    else
+        local lastname = player:playerbasemodule():get_lastname()
+        code = message_code.success
+        if lastname and string.len(lastname) > 0 then --第一次改名  免费
+            --验证货币
+            local token = player:tokenmodule():gettoken("XianYu")
+            if token < get_static_config().globals.changename_cost then
+                code = message_code.less_xianyu
+            end
+        end
+        if code == message_code.success then
+            cacheinterface.callback_is_player_name(msg.name, changerolename_cb, player, msg)
+        end
+    end
+    if code ~= message_code.success then
+        player:send_request("changerolenameret", { code = code, name = msg.name })
+    end
+end
+
+local function cb_reqdetailplayerinfo(info, player)
+    local code = message_code.success
+    if not info then
+        code = message_code.not_found_player
+    end
+    player:send_request("syncdetailplayerinfo", { info = info, code = code })
+end
+function client_request.reqdetailplayerinfo(player, msg)
+    cacheinterface.callback_player_command(msg.playerid, "lua", "get_detail_playerinfo", cb_reqdetailplayerinfo, player)
+end
+
+function client_request.logout(player, msg)
+    player:logout()
+    local logout_code = {
+        success = 1,
+    }
+    return { code = logout_code.success }
+end
+
+function client_request.reqworldlevel(player, msg)
+    local module = player:cachemodule()
+    module:sync_world_level()
+end
+
+function client_request.reqsystemoption(player, msg)
+    local base = player:playerbasemodule()
+    return { info = info, info1 = info1 }
+end
+
+function client_request.resetsystemoption(player, msg, rawmsg)
+    local base = player:playerbasemodule()
+    return {info = info}
+end
+
+--绑定账号
+function client_request.bindaccount(player, msg)
+    local account = player:getaccount()
+    local code = message_code.unkown
+    local ret = httprequest.bind_account(account, msg.platform, msg.signture, msg.email)
+    if ret then
+        if ret == 1 then
+            code = message_code.success
+        elseif ret == 2 then
+            code = message_code.have_bind
+        elseif ret == 3 then
+            code = message_code.invalid_token
+        elseif ret == 4 then
+            code = message_code.error_platform
+        elseif ret == 5 then
+            code = message_code.error_bind
+        end
+    end
+    return { code = code }
+end

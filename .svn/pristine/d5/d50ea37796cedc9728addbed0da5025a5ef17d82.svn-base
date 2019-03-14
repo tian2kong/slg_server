@@ -1,0 +1,25 @@
+云风wiki:
+https://github.com/cloudwu/skynet/wiki/DebugConsole
+
+
+安装readline、rlwrap
+yum install gcc
+yum install readline* 
+安装package文件夹下的rlwrap-0.42.tar.gz
+tar -zxvf rlwrap-0.42.tar.gz 
+./configure
+make && make install
+
+readline和rlwrap可解决方向键、后退键乱码问题。nc可以主动退出。
+命令：
+rlwrap nc 127.0.0.1 11105	cehua
+rlwrap nc 127.0.0.1 4005          qa
+
+help查看命令
+debug address 针对一个 lua 服务启动内置的单步调试器。http://blog.codingnow.com/2015/02/skynet_debugger.html
+inject address script 将 script 名字对应的脚本插入到指定服务中运行（通常可用于热更新补丁）。
+dup2out tty 重定向标准输出到指定终端
+hotfix_static 热更新static配置
+signal address 默认为信号0，可以查看死循环时lua堆栈并终止,信号1为查看内存
+logon address 开启输出指定服务消息日志，路径在logpath中设置
+logoff address 关闭服务消息日志

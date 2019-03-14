@@ -1,0 +1,174 @@
+local class = require "class"
+local IPlayerModule = require "iplayermodule"
+local cacheinterface = require "cacheinterface"
+local clusterext = require "clusterext"
+local timext = require "timext"
+local cachecommon = require "cachecommon"
+local skynet = require "skynet"
+local interaction = require "interaction"
+local common = require "common"
+
+local PlayerCacheModule = class("PlayerCacheModule", IPlayerModule)
+
+--构造函数
+function PlayerCacheModule:ctor(player)
+    self._player = player
+    self.cacheinfo = {}
+
+    self.worldlv = 1
+    self.worldlvtime = 0
+    self.opensertime = timext.current_time()
+    self.s_addtion_per = 0 --服务器等级加成(百分比)
+end
+
+--读库
+function PlayerCacheModule:loaddb()
+end
+
+--初始化
+function PlayerCacheModule:init()
+    clusterext.call(get_cluster_service().cacheservice, "lua", "register_agent", self._player:getplayerid(), interaction.pack_agent_address(self._player:getplayerid()))
+    --[[
+    local ret = cacheinterface.call_global_data()
+    self:alter_worldlv(ret.worldlv, ret.worldlvtime)
+    self:alter_opensertime(ret.opensertime)
+    ]]
+    
+end
+
+--摧毁服务
+function PlayerCacheModule:destroy()
+    clusterext.call(get_cluster_service().cacheservice, "lua", "unregister_agent", self._player:getplayerid())
+end
+
+--计算大唐盛世加成
+function PlayerCacheModule:calc_dt_addtion()
+    --计算服务器等级加成(经验)
+    local addtion = 0
+    local level = self._player:playerbasemodule():get_level()
+    local cfg = self:raw_get_addition(level)
+    if cfg then
+        addtion = cfg.bonus
+    end
+    self:set_addtion_percent(addtion)
+end
+
+function PlayerCacheModule:raw_get_addition(level)
+    local wordlv = self:get_worldlv()
+    local cfg
+    for k,v in ipairs(get_static_config().server_lv_bonus) do
+        if level <= wordlv + v.level then
+            cfg = v
+            break
+        end
+    end
+    return cfg
+end
+function PlayerCacheModule:get_exp_addition(level)
+    local addtion = 0
+    local cfg = self:raw_get_addition(level)
+    if cfg then
+        addtion = cfg.bonus
+    end
+    return addtion
+end
+function PlayerCacheModule:get_passive_addition(level)
+    local addtion = 0
+    local cfg = self:raw_get_addition(level)
+    if cfg then
+        addtion = cfg.passiveskill_exp_bonus
+    end
+    return addtion
+end
+
+function PlayerCacheModule:get_pet_addition(level)
+    local addtion = 0
+    local cfg = self:raw_get_addition(level)
+    if cfg then
+        addtion = cfg.bonus_pet
+    end
+    return addtion
+end
+
+function PlayerCacheModule:change_player_lv()
+    self:calc_dt_addtion()
+end
+
+--服务器等级变更
+function PlayerCacheModule:alter_worldlv(level, worldlvtime)
+    if level then
+        self.worldlv = level
+        self:calc_dt_addtion()
+    end
+    self.worldlvtime = worldlvtime
+end
+
+--服务器等级变更
+function PlayerCacheModule:alter_opensertime(time)
+    if time then
+        self.opensertime = time
+    end
+end
+
+--获取服务器等级
+function PlayerCacheModule:get_worldlv()
+    return self.worldlv
+end
+
+--获取开服时间
+function PlayerCacheModule:get_opensertime()
+    return self.opensertime
+end
+
+
+--获取服务器等级加成
+function PlayerCacheModule:get_addtion_percent()
+    return self.s_addtion_per
+end
+
+function PlayerCacheModule:set_addtion_percent(addtion)
+    if addtion and self.s_addtion_per ~= addtion then
+        self.s_addtion_per = addtion
+    end
+end
+
+function PlayerCacheModule:update_player_info()
+    local obj = self._player:get_observer_value(self)
+    clusterext.send(get_cluster_service().cacheservice, "lua", "update_player_info", self._player:getplayerid(), obj)
+end
+
+--AI
+function PlayerCacheModule:run(frame)
+end
+
+--上线处理
+function PlayerCacheModule:online()
+    self._player:monitor_observer({
+        "playerid",
+        "name",
+        "level",
+        "shape",
+        "roleid",
+        "lastname",
+        "language",
+        "title",
+        "logintime",
+    }, self, self.update_player_info)
+    local obj = self._player:get_observer_value(self)
+    clusterext.send(get_cluster_service().cacheservice, "lua", "player_login", obj)
+end
+
+--下线处理
+function PlayerCacheModule:offline()
+    clusterext.send(get_cluster_service().cacheservice, "lua", "player_logout", self._player:getplayerid())
+end
+
+--5点刷新
+function PlayerCacheModule:dayrefresh()
+end
+
+function PlayerCacheModule:sync_world_level()
+    self._player:send_request("syncworldlevel", { level = self.worldlv, time = self.worldlvtime })
+end
+
+return PlayerCacheModule

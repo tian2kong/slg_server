@@ -1,0 +1,183 @@
+local mapcommon = require "mapcommon"
+local timext = require "timext"
+local marchcommon = BuildCommon("marchcommon")
+
+marchcommon.MarchType = {
+	eMT_AtkNPC = 1, --杀怪
+	eMT_CollectRes = 2, --采集资源
+	eMT_AtkRes = 3, --攻击资源点
+	eMT_Camp = 4, --扎营
+	eMT_Mass = 5, --集结
+	eMT_Back = 6, --返回
+}
+
+marchcommon.MarchStatus = {
+	eMS_Walk 	= 1, --行军
+	eMS_Working = 2, --工作
+	eMS_Back 	= 3, --返回
+}
+
+--资源负重比例
+marchcommon.WeightSlotByResObjectType = {
+	[mapcommon.ResourceType.eRT_Gas] = 1,	--天然气
+}
+
+
+
+---------------------------------------------Function-----------------------------------
+--计算行军过的路程
+function marchcommon.CaculateMarchPastDistance(marchobj)
+	local distance = marchobj:get_distance()
+	local nodedistance, nodetime = marchobj:get_marchnode()
+	if nodedistance >= distance then
+		return distance
+	end
+
+	local curtime = timext.current_time()
+	if curtime <= nodetime then
+		return nodedistance
+	end
+
+	local pasttime = curtime - nodetime
+	local speed = marchobj:get_marchspeed()
+	return math.min(distance, math.floor(nodedistance + (speed * pasttime)))
+end
+
+--计算行军时间
+function marchcommon.CaculateMarchtime(distance, speed)
+	--TODOX 策划配置
+	return math.ceil(distance / speed)
+end
+
+--计算行军路线经过的区块
+function marchcommon.marchThroughblocks(x1, y1, x2, y2)
+	local FUNC_xyToblockstartxy = mapcommon.xyToblockstartxy
+	local FUNC_xyToblockkey = mapcommon.xyToblockkey
+
+	local bstart_x1, bstart_y1 = FUNC_xyToblockstartxy(x1, y1)
+	local bstart_x2, bstart_y2 = FUNC_xyToblockstartxy(x2, y2)
+
+	local through_blockset = {}
+
+	--起点和终点都在同一格内
+	if bstart_x1 == bstart_x2 and bstart_y1 == bstart_y2 then
+		local bkey = FUNC_xyToblockkey(x1, y1)
+		through_blockset[bkey] = true
+	elseif bstart_x1 == bstart_x2 then
+		--起点和终点都在同一个block_x坐标上 看做与y轴平行 计算垂直方向的block个数
+		for y = bstart_y1, bstart_y2, mapcommon.block_y_offset do
+			local bkey = FUNC_xyToblockkey(bstart_x1, y)
+			through_blockset[bkey] = true
+		end
+		
+	elseif bstart_y1 == bstart_y2 then
+		--起点和终点都在同一个block_y坐标上, 看做与X轴平行 计算水平方向的block个数
+		for x = bstart_x1, bstart_x2, mapcommon.block_x_offset do
+			local bkey = FUNC_xyToblockkey(x, bstart_y1)
+			through_blockset[bkey] = true
+		end
+
+	else
+		local FUNC_blockkeyToblockxy = mapcommon.blockkeyToblockxy
+		local FUNC_blockxyToblockkey = mapcommon.blockxyToblockkey
+		local FUNC_blockkeyToblockstartxy = mapcommon.blockkeyToblockstartxy
+
+	    --两点求 y=kx+b斜线公式
+	    if x1 > x2 then --startx确保小的在前面
+			x1, x2 = x2, x1
+			y1, y2 = y2, y1
+		end
+
+		--如果不整除, K会有误差,
+		local k = (y1 - y2) / (x1 - x2)--k<0斜向下线, k>0斜向上线
+		local b = y1 - (k*x1)
+
+		local endbkey = FUNC_xyToblockkey(x2, y2)
+		local endblock_x, endblock_y = FUNC_blockkeyToblockxy(endbkey) 
+		through_blockset[endbkey] = true
+
+		local nextbkey = FUNC_xyToblockkey(x1, y1)
+		local block_x, block_y = FUNC_blockkeyToblockxy(nextbkey) 
+		while( nextbkey ~= endbkey and 
+			( ( k > 0 and block_y <= endblock_y) or ( k < 0 and block_y >= endblock_y ) ) ) do 
+			through_blockset[nextbkey] = true
+
+			local lx, ly = FUNC_blockkeyToblockstartxy(nextbkey)
+			local rx = lx + mapcommon.block_x_offset
+			local y = k * rx + b
+			if k > 0 then
+				--[[k>0
+					-------------
+					|     | /   |
+					|  3  |/ 4  |
+					|     /     |
+					-----/b------
+					|   / |     |
+					|  /1 |  2  |   
+					| /   |     |   
+					a------------
+					a(lx,ly),  b(rx, ry)
+					
+					公式func  k*rx+b
+					if ( func < ry ) {
+						--一定穿过2区域
+					} elseif ( func == ry ) {
+						--一定穿过4区域
+					} else {
+						--一定穿过3区域
+					}
+				]]
+				
+				ry = ly + mapcommon.block_y_offset
+				if ry == y then--4
+					nextbkey = FUNC_blockxyToblockkey(block_x+1, block_y+1)
+
+				elseif ry > y then--2
+					nextbkey = FUNC_blockxyToblockkey(block_x+1, block_y)
+
+				else --3
+					nextbkey = FUNC_blockxyToblockkey(block_x, block_y+1)
+
+				end
+			else
+				--[[k<0
+					a------------
+					| \   |     |
+					|  \1 |  2  |
+					|   \ |     |
+					-----\b------
+					|     \     |
+					|  3  |\ 4  |   
+					|     | \   |   
+					-------------
+					a(lx,ly),  b(rx, ry)
+					
+					公式func  k*rx+b
+					if ( func < ry ) {
+						--一定穿过3区域
+					} elseif ( func == ry ) {
+						--一定穿过4区域
+					} else {
+						--一定穿过2区域
+					}
+				]]
+				ry = ly - mapcommon.block_y_offset
+				if ry == y then--4
+					nextbkey = FUNC_blockxyToblockkey(block_x-1, block_y-1)
+
+				elseif ry > y then--3
+					nextbkey = FUNC_blockxyToblockkey(block_x, block_y-1)
+
+				else --2
+					nextbkey = FUNC_blockxyToblockkey(block_x+1, block_y)
+
+				end
+			end
+			block_x, block_y = FUNC_blockkeyToblockxy(nextbkey) 
+		end
+	end	
+	return through_blockset
+end
+
+
+return marchcommon

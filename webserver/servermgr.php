@@ -1,0 +1,748 @@
+<?php
+	include_once "common.php";
+	include_once "mysql.php";
+
+	#获取服务器配置
+	function getServerCfg($serverid) {
+		$key = serverkey($serverid);
+		$result = PRedis::getarray($key);
+		if (!$result) {
+			global $WEB_DB;
+
+			$db = new PMysql($WEB_DB);
+			$result = $db->query("select * from game_config where serverid=" . $serverid);
+			if ($result) {
+				$result = $result[0];
+				PRedis::setarray($key, $result, CACHE_TIME);
+			}
+		}
+		if ($result) {
+			$data = json_decode($result["data"], true);
+			$data["serverid"] = $result["serverid"];
+		}
+		return $data;
+	}
+	#获取世界服务器配置
+	function getWorldCfg($worldid) {
+		$key = worldkey($worldid);
+		$result = PRedis::getarray($key);
+		if (!$result) {
+			global $WEB_DB;
+
+			$db = new PMysql($WEB_DB);
+			$result = $db->query("select * from world_config where worldid=" . $worldid);
+			if ($result) {
+				$result = $result[0];
+				PRedis::setarray($key, $data, CACHE_TIME);
+			}
+		}
+		if ($result) {
+			$data = json_decode($result["data"], true);
+			$data["worldid"] = $result["worldid"];
+		}
+		return $data;
+	}
+
+	#删除服务器配置
+	function delServer($serverid) {
+		$key = serverkey($serverid);
+		global $WEB_DB;
+
+		$db = new PMysql($WEB_DB);
+		
+		PRedis::deletekey($key);
+		PRedis::deletekey(SERVER_LIST);
+		PRedis::deletekey(DEFAULT_SERVER);
+		return $db->query("delete from sc_partition_server where serverid=" . $serverid);
+	}
+
+	#添加服务器
+	function addServer($fieldarr) {
+		global $WEB_DB;
+
+		$db = new PMysql($WEB_DB);
+		PRedis::deletekey(SERVER_LIST);
+		PRedis::deletekey(DEFAULT_SERVER);
+		return $db->insert($fieldarr, "sc_partition_server");
+	}
+
+	#更新服务器配置
+	function updateServerStatic($server) {
+		$url = 'http://' . $server['http_host'] . ':' . $server['http_port'] . '/reloadconfig';
+		$ret = file_get_contents($url);
+		return $ret;
+	}
+	#更新服务器配置
+	function updateServer($fieldarr, $serverid) {
+		global $WEB_DB;
+		$dbkey = null;
+		if ($serverid != null) {
+			$key = serverkey($serverid);
+			PRedis::deletekey($key);
+			$dbkey = array('serverid' => $serverid);
+			PRedis::deletekey(SERVER_LIST);
+		}
+		$db = new PMysql($WEB_DB);
+		PRedis::deletekey(DEFAULT_SERVER);
+		$ret = $db->update("sc_partition_server", $dbkey, $fieldarr);
+		if ($ret) {
+			if ($serverid != null) {
+				$server = getServerCfg($serverid);
+				if ($server) {
+					updateServerStatic($server);
+				}
+			} else {
+				$list = getAllServerCfg();
+				$len = count($list);
+				for ($i=0; $i<$len; $i++) {
+					$server = $list[$i];
+					updateServerStatic($server);
+				}
+			}
+		}
+		return $ret;
+	}
+
+	#获取账号默认服务器
+	/*
+	cc.PLATFORM_OS_WINDOWS = 0
+	cc.PLATFORM_OS_LINUX   = 1
+	cc.PLATFORM_OS_MAC     = 2
+	cc.PLATFORM_OS_ANDROID = 3
+	cc.PLATFORM_OS_IPHONE  = 4
+	cc.PLATFORM_OS_IPAD    = 5
+	cc.PLATFORM_OS_BLACKBERRY = 6
+	cc.PLATFORM_OS_NACL    = 7
+	cc.PLATFORM_OS_EMSCRIPTEN = 8
+	cc.PLATFORM_OS_TIZEN   = 9
+	cc.PLATFORM_OS_WINRT   = 10
+	cc.PLATFORM_OS_WP8     = 11
+	*/
+	function getAccountServer($account, $clientos) {
+		$serverid = NULL;
+		if ($account) {
+			$key = defaultkey($account);
+			$serverid = PRedis::getstring($key);
+		}
+		if (!$serverid) {
+			$default = 1;
+			if ($clientos != null and ($clientos == 4 or $clientos == 5)) {
+				$default = 2;
+			}
+			$result = PRedis::getarray(DEFAULT_SERVER);
+			if ($result == null) {
+				$result = array();
+			}
+			if (!isset($result[$default])) {
+				global $WEB_DB;
+
+				$db = new PMysql($WEB_DB);
+				$ret = $db->query(sprintf("select serverid from sc_partition_server where new_acc_default=%d;", $default));
+				if ($ret == null) {
+					$ret = $db->query("select serverid from sc_partition_server where new_acc_default=1;");
+				}
+				if ($ret) {
+					$result[$default] = $ret[0]['serverid'];
+				}
+				PRedis::setarray(DEFAULT_SERVER, $result, CACHE_TIME);
+			}
+			$serverid = $result[$default];
+		}
+		$server = getServerCfg($serverid);
+		return getServerMsg($server, $account);
+	}
+
+	#获取所有服务器配置
+	function getAllServerCfg() {
+		global $WEB_DB;
+
+		$list = PRedis::getlist(SERVER_LIST);
+		if (!$list) {
+			$db = new PMysql($WEB_DB);
+
+			$result = $db->query("select * from game_config;");
+			$list = array();
+			foreach ($result as $key => $value) {
+				PRedis::setarray(serverkey($value["serverid"]), $value, CACHE_TIME);
+
+				array_push($list, serverkey($data["serverid"]));
+			}
+			PRedis::setlist(SERVER_LIST, $list, CACHE_TIME);
+
+		} else {
+			$len = count($list);
+			$result = array();
+			for ($i=0;$i<$len;$i++) {
+				$ret = PRedis::getarray($list[$i]);
+				array_push($result, $ret);
+			}
+			return $result;
+		}
+		$data = json_decode($value["data"], true);
+				$data["serverid"] = $value["serverid"];
+	}
+
+	#获取消息数据
+	function getServerMsg($server, $account) {
+		$info = array(
+			"serverid"=>$server["serverid"],        #服务器id
+		    "servername"=>$server["server_name"],    #服务器名字
+		    "newtag"=>$server["newtag"],         	#新服标记
+		    "ip"=>$server["ls_network_ip"],         #服务器ip
+		    "port"=>$server["ls_network_port"],     #端口
+		    "status"=>$server["status"],         	#服务器ip
+		    "groupid"=>$server["groupid"],         	#组id
+		    "groupname"=>$server["groupname"],      #组名称
+		    "client_version"=>$server["client_version"]       #组名称
+		);
+		if ($account) {
+			$key = accountkey($server["serverid"], $account);
+			$ret = PRedis::getarray($key);
+			if ($ret) {
+				$info["player"] = array(
+					"level"=>$ret["level"],
+					"roleid"=>$ret["roleid"],
+					"name"=>$ret["name"]
+				);
+			}
+		}
+		return $info;
+	}
+
+	#服务器列表
+	function getServerList($account) {
+		$list = getAllServerCfg();
+		$ret = array();
+		$len = count($list);
+		for ($i=0; $i<$len; $i++) {
+			$server = $list[$i];
+			$groupid = $server["groupid"];
+			$groupname = $server["groupname"];
+			$ret[$groupid] = array(
+				"groupid"=>$server["groupid"],
+				"groupname"=>$server["groupname"]
+			);
+		}
+		return $ret;
+	}
+
+	#组列表
+	function getGroupList($account, $groupid) {
+		$list = getAllServerCfg();
+		$ret = array();
+		$len = count($list);
+		for ($i=0; $i<$len; $i++) {
+			$server = $list[$i];
+			if ($server["groupid"] == $groupid) {
+				array_push($ret, getServerMsg($server, $account));
+			}
+		}
+		return $ret;
+	}
+
+	#账号列表
+	function getAccountList($account) {
+		if (!$account) {
+			return array();
+		}
+		$list = getAllServerCfg();
+		$ret = array();
+		$len = count($list);
+		for ($i=0; $i<$len; $i++) {
+			$server = $list[$i];
+			$key = accountkey($server["serverid"], $account);
+			$player = PRedis::getarray($key);
+			if ($player) {
+				array_push($ret, getServerMsg($server, $account));
+			}
+		}
+		return $ret;
+	}
+
+	#发货
+	function chargeship($platform, $order) {
+		try {
+			$server = getServerCfg($order['serverid']);
+			if (!$server) {
+				throw new Exception("charge not found server " . $order['serverid']);
+			}
+			$host = 'http://' . $server['http_host'] . ':' . $server['http_port'];
+			$param = 0;
+			if ($order['tester'] == 1) {
+				$param = 1;
+			} else if ($platform == 'android') {
+				$param = 3;
+			} else if ($platform == 'ios') {
+				$param = 2;
+			} else if ($platform == 'feiyu') {
+				$param = 4;
+			}
+			$url=sprintf('/charge?playerid=%d&productid=%s&platform=%d', $order['playerid'], $order['productId'], $param);
+			$ret = file_get_contents($host . $url);
+			if ($ret == 1) {#成功
+				global $WEB_DB;
+				$db = new PMysql($WEB_DB);
+				$result = $db->query(sprintf("update charge_dh set status=1 where platform='%s' and orderId='%s';", $platform, $order['orderId']));
+				if (!$result) {
+					throw new Exception("charge update error order:" . $order['serverid']);
+				}
+				return true;
+			}
+		} catch (Exception $e) {   
+			PRedis::ERROR($e->getMessage());
+		}
+		return false;
+	}
+	#是否充值测试帐号
+	function isChargeTester($device) {
+		global $WEB_DB;
+		$db = new PMysql($WEB_DB);
+		$result = $db->query(sprintf("select * from charge_tester where device='%s'", $device));
+		if (!$result) {
+			return false;
+		}
+		return true;
+	}
+	#充值
+	function paylogic($platform, $param) {
+		if (PRedis::iskey(ORDER, $param['orderId'])) {#该订单已经在处理了 防止重入
+			return ;
+		}
+		PRedis::addkey(ORDER, $param['orderId']);
+		try {
+			global $WEB_DB;
+			$db = new PMysql($WEB_DB);
+			$sql = sprintf("select * from charge_dh where orderId='%s' and platform='%s';", $param['orderId'], $platform);
+			$result = $db->query($sql);
+			if ($result) {
+				$param = $result[0];
+			}
+			if (!$result) {#订单不在库里 进行存库
+				//转成时间格式
+				date_default_timezone_set('UTC');
+				$param['purchaseTime'] = date('Y-m-d H:i:s', time());
+				$param['status'] = 0;
+				$ret = $db->query(sprintf("insert into charge_dh (serverid,playerid,account,device,orderId,productId,purchaseTime,status,tester,platform) values(%d,%d,'%s','%s','%s','%s','%s',%d,%d,'%s')",
+					$param['serverid'],
+					$param['playerid'],
+					$param['account'],
+					$param['device'],
+					$param['orderId'],
+					$param['productId'],
+					$param['purchaseTime'],
+					$param['status'],
+					$param['tester'],
+					$platform
+				));
+				if (!$ret) {
+					throw new Exception("charge insert sql error");
+				}
+			}
+			if ($param['status'] == 0) {#开始发货
+				if (!chargeship($platform, $param)) {
+					PRedis::removekey(CHAREKEY, $param['playerid']);
+				}
+			}
+		} catch (Exception $e) {   
+			PRedis::ERROR($e->getMessage());
+		}   
+		PRedis::removekey(ORDER, $param['orderId']);
+	}
+	#请求充值数据
+	function requestcharge($serverid, $playerid) {
+		if (PRedis::iskey(CHAREKEY, $playerid)) {
+			return ;
+		}
+		global $WEB_DB;
+		$db = new PMysql($WEB_DB);
+		$result = $db->query(sprintf('select * from charge_dh where serverid=%d and playerid=%d and status=0', $serverid, $playerid));
+		$succ = true;
+		if ($result) {
+			foreach ($result as $key => $param) {
+				if (!PRedis::iskey(ORDER, $param['orderId'])) {#该订单已经在处理了 防止重入
+					PRedis::addkey(ORDER, $param['orderId']);
+					try {
+						chargeship($param['platform'], $param);
+					} catch (Exception $e) {   
+						PRedis::ERROR($e->getMessage());
+					}
+					PRedis::removekey(ORDER, $param['orderId']);
+				} else {
+					$succ = false;
+				}
+			}
+		}
+		if ($succ) {
+			PRedis::addkey(CHAREKEY, $playerid);
+		}
+	}
+
+
+	#gamecenter平台验证
+	function gamecenter_verify($signture, $user_id) {
+		$params = json_decode($signture, true);
+		if (!$params) {
+			return null;
+		}
+		try {
+			$user_id = $params["playerID"]; // e.g. G:20010412315
+			if (!$user_id) {
+				return null;
+			}
+			$succ = false;
+			$oldtoken = PRedis::getarrayvalue(PLATFORMCACHE, $user_id);
+			if ($oldtoken and $oldtoken == $signture) {
+				$succ = true;
+			} else {
+				$timestamp = (int)($params["timestamp"]); // e.g. 1447754520194
+				$bundle_id = IOSBUNDLE;
+				$public_key_url = $params["publicKeyUrl"]; // e.g. https://static.gc.apple.com/public-key/gc-prod-2.cer
+				$salt = base64_decode($params["salt"]); // Binary
+				$signature = base64_decode($params["signature"]); // Binary
+
+				// Timestamp is unsigned 64-bit integer big endian
+				$highMap = 0xffffffff00000000;
+				$lowMap = 0x00000000ffffffff;
+				$higher = ($timestamp & $highMap)>>32;
+				$lower = $timestamp & $lowMap;
+				$timestamp = pack('NN', $higher, $lower);
+
+				// Concatenate the string
+				$data = $user_id . $bundle_id . $timestamp . $salt;
+
+				// ATTENTION!!! Do not hash it! $data = hash("sha256", $packed);
+
+				// Fetch the certificate. This is dirty because it is neither cached nor verified that the url belongs to Apple.
+				$ssl_certificate = httpscurl($public_key_url);
+
+				$pem = chunk_split(base64_encode($ssl_certificate), 64, "\n");
+				$pem = "-----BEGIN CERTIFICATE-----\n" . $pem . "-----END CERTIFICATE-----\n";
+				// it is also possible to pass the $pem string directly to openssl_verify
+				$pubkey_id = openssl_pkey_get_public($pem);
+
+				// Verify that the signature is correct for $data
+				$verify_result = openssl_verify($data, $signature, $pubkey_id, OPENSSL_ALGO_SHA256);
+				openssl_free_key($pubkey_id);
+				$succ = ($verify_result == 1);
+			}
+			if ($succ) {
+				PRedis::setarray(PLATFORMCACHE, array($user_id=>$signture), PLATFORMTIME);
+			   	return $user_id;
+			}
+		} catch (Exception $e) {
+			PRedis::ERROR($e->getMessage());
+		}
+		return null;
+	}
+
+	#feiyu 验证
+	function feiyu_verify($token, $platform, $email) {
+		$param = array(
+			'token' => $token,
+			'time' => time(),
+		);
+		$sign = request_sign($param, APPKEY);
+		$str = sprintf('https://sdk2-syapi.737.com/sdk/index/%s/%s/user_check?token=%s&time=%s&sign=%s'
+			, APPID
+			, $platform
+			, $token
+			, $param['time']
+			, $sign
+		);
+		$res = httpscurl($str);
+		if ($res == $email) {
+			return $email;
+		}
+		return null;
+	}
+
+	#facebook 验证
+	function facebook_verify($token, $email) {
+		if (!$email) {
+			return null;
+		}
+		try {
+			$succ = false;
+			$oldtoken = PRedis::getarrayvalue(PLATFORMCACHE, $email);
+			if ($oldtoken and $oldtoken == $token) {
+				$succ = true;
+			} else if($token) {
+				$res = httpscurl(sprintf('https://graph.facebook.com/v2.8/debug_token?input_token=%s&access_token=%s', $token, FBID . '|' . FBSECRET));
+				if ($res) {
+					$jsonobj = json_decode($res);
+					if ($jsonobj) {
+						$jsonobj = $jsonobj->data;
+						if ($jsonobj and isset($jsonobj->user_id) and $jsonobj->user_id == $email) {
+				   			$succ = true;
+				   		}
+					}
+				}
+			}
+			if ($succ) {
+				PRedis::setarray(PLATFORMCACHE, array($email=>$token), PLATFORMTIME);
+			   	return $email;
+			}
+			return null;
+		} catch (Exception $e) {   
+			PRedis::ERROR($e->getMessage());
+		}
+		return null;
+	}
+
+	#google play 验证
+	function googleplay_verify($token, $email) {
+		if (!$email) {
+			return null;
+		}
+		try {
+			$succ = false;
+			$oldtoken = PRedis::getarrayvalue(PLATFORMCACHE, $email);
+			if ($oldtoken and $oldtoken == $token) {
+				$succ = true;
+			} else if($token) {
+				// 客户端请求一个TOKEN和EMAIL发给服务器，服务器拿这个TOKEN去https://www.googleapis.com/oauth2/v3/tokeninfo地址请求EMAIL信息，然后比对TOKEN和EMAIL，并且根据返回的NAME来指定账号名
+				$res = httpscurl('https://www.googleapis.com/oauth2/v3/tokeninfo?access_token='.$token);
+				if ($res) {
+					$jsonobj  = json_decode($res);
+			   		if ($jsonobj and isset($jsonobj->email) and $jsonobj->email == $email) {
+			   			$succ = true;
+			   		}
+				}
+			}
+			if ($succ) {
+				PRedis::setarray(PLATFORMCACHE, array($email=>$token), PLATFORMTIME);
+			   	return $email;
+			}
+			return null;
+		} catch (Exception $e) {   
+			PRedis::ERROR($e->getMessage());
+		}
+		return null;
+	}
+
+	#
+	function get_platform_info($result) {
+		if (!$result) {
+			return null;
+		}
+		$ret = array('uid'=>$result['uid'], 'device'=>$result['device'], 'lastdevice'=>$result['lastdevice']);
+		$platform = array();
+		global $PLATFORM;
+		foreach ($PLATFORM as $key => $value) {
+			if (isset($result[$value]) && $result[$value] != "") {
+				$platform[$value] = $result[$value];
+			}
+		}
+		$ret['platform'] = $platform;
+		return $ret;
+	}
+	#查找一个平台对应的openid
+	function found_openid($platform, $key, $nocache = false) {
+		$result = null;
+		$nocache = NOCACHE;
+		$rediskey = platformkey($platform, $key);
+		if (!$nocache) {
+			$str = PRedis::getstring($rediskey);
+			if ($str) {
+				$result = json_decode($str, true);
+			}
+		}
+		if (!$result) {
+			global $WEB_DB;
+			$db = new PMysql($WEB_DB);
+			$temp = $db->query(sprintf("select * from webaccount where binary %s like '%s';", $platform, $key));
+			if ($temp) {
+				$result = get_platform_info($temp[0]);
+				if ($result) {
+					PRedis::setstring($rediskey, json_encode($result), CACHE_TIME);
+				}
+			}
+		}
+		return $result;
+	}
+	#找设备
+	function found_device($device) {
+		$key = devicekey($device);
+		$result = null;
+		$nocache = NOCACHE;
+		if (!$nocache) {
+			$str = PRedis::getstring($key);
+			if ($str) {
+				$result = json_decode($str, true);
+			}
+		}
+		if (!$result) {
+			global $WEB_DB;
+			$db = new PMysql($WEB_DB);
+			$temp = $db->query(sprintf("select * from webaccount where binary device like '%s';", $device));
+			if ($temp) {
+				$result = get_platform_info($temp[0]);
+				if ($result) {
+					PRedis::setstring($key, json_encode($result), CACHE_TIME);
+				}
+			}
+		}
+		return $result;
+	}
+	#找openid
+	function found_account($account, $nocache = false) {
+		$result = null;
+		$nocache = NOCACHE;
+		if (!$nocache) {
+			$str = PRedis::getstring($account);
+			if ($str) {
+				$result = json_decode($str, true);
+			}
+		}
+		if (!$result) {
+			global $WEB_DB;
+			$db = new PMysql($WEB_DB);
+			$temp = $db->query(sprintf("select * from webaccount where binary uid like '%s';", $account));
+			if ($temp) {
+				$result = get_platform_info($temp[0]);
+				if ($result) {
+					PRedis::setstring($account, json_encode($result), CACHE_TIME);
+				}
+			}
+		}
+		return $result;
+	}
+
+	#批量查找
+	function found_accounts($accounts, $nocache = false) {
+		$data = array();
+		$account_set = array(); //缓存找不到,查库
+		$nocache = NOCACHE;
+		if (!$nocache) {
+			foreach ($accounts as $acc) {
+				$result = null;
+				$str = PRedis::getstring($acc);
+				if ($str) {
+					$result = json_decode($str, true);
+					$data[$acc] = $result;
+				}
+
+				if (!$result) {
+					array_push($account_set, $acc);
+				}
+			}
+		} else {
+			$account_set = &$accounts;
+		}
+
+		if ( !empty($account_set) ) {
+			$param = NULL;
+			foreach ($account_set as $v) {
+				$v = "'" . $v . "'";
+				if ( $param == NULL ) {
+					$param = $v;
+				} else {
+					$param .= "," . $v;	
+				}
+			}
+
+			global $WEB_DB;
+			$db = new PMysql($WEB_DB);
+			$sql = sprintf("select * from webaccount where binary uid in (%s);", $param);
+			$temp = $db->query($sql);
+			if ($temp) {
+				foreach ($temp as $value) {
+					$result = get_platform_info($value);
+					$acc = $result['uid'];
+					$data[$acc] = $result;
+				}
+			}
+		}
+		return $data;
+	}
+
+	#获取账号信息
+	function get_account_info($device, $platform, $key, $subplatform) {
+		$ret = array('platform' => array());
+		try {
+			global $WEB_DB;
+			$db = new PMysql($WEB_DB);
+
+			$account = null;
+
+			$result = null;
+			if ($platform) {
+				$result = found_openid($platform, $key, true);
+				
+			} else {
+				$result = found_device($device);
+			}
+			if ($result) {
+				$account = $result['uid'];
+				$ret['platform'] = $result['platform'];
+			}
+			
+			if (!$account) {
+				$account = createuid();
+				$fieldarr = array();
+				if ($platform) {
+					$fieldarr['uid'] = $account;
+					$fieldarr[$platform] = $key;
+					$ret['platform'][$platform] = $key;
+				} else {
+					$fieldarr['uid'] = $account;
+					$fieldarr['device'] = $device;
+				}
+				if ($subplatform) {
+					$fieldarr['subplatform'] = $subplatform;
+				}
+				$fieldarr['lastdevice'] = $device;
+				$db->insert($fieldarr, 'webaccount');
+			} else {
+				$db->query(sprintf("update webaccount set lastdevice='%s' where binary uid like '%s';", $device, $account));
+			}
+			$ret['account'] = $account;
+			
+		} catch (Exception $e) {   
+			PRedis::ERROR($e->getMessage());
+		}
+		return $ret;
+	}
+	function bind_account_info($account, $platform, $key) {
+		$code = 1;
+		try {
+			do {
+				$deviceret = found_account($account, true);
+				if (!$deviceret) {
+					$code = 4;
+					break;
+				} elseif ($deviceret && isset($deviceret['platform'][$platform])) {
+					$code = 2;
+					break;
+				}
+				$platformret = found_openid($platform, $key, true);
+				if ($platformret) {
+					$code = 2;
+					break;
+				}
+				global $WEB_DB;
+				$db = new PMysql($WEB_DB);
+                $dbkey = array('uid' => $deviceret['uid']);
+				$dbfield = array($platform => $key);
+				$db->update('webaccount', $dbkey, $dbfield);
+
+				#删除缓存
+				PRedis::deletekey($deviceret['uid']);
+				if ($deviceret['device']) {
+					$key = devicekey($deviceret['device']);
+					PRedis::deletekey($key);
+				}
+				foreach ($deviceret['platform'] as $key => $value) {
+					$key = platformkey($key, $value);
+					PRedis::deletekey($key);
+				}
+			} while (false);
+		} catch (Exception $e) {   
+			PRedis::ERROR($e->getMessage());
+		}
+		return $code;
+	}
+
+
+
+?>

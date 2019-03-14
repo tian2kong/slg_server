@@ -1,0 +1,482 @@
+local snax = require "snax"
+local skynet = require "skynet"
+local Database = require "database"
+local interaction = require "interaction"
+local timext = require "timext"
+local class = require "class"
+local common = require "common"
+local Random = require "random"
+local socket = require "socket"
+local clusterext = require "clusterext"
+local PlayerThingModule = require "playerthingmodule"
+local PlayerMailModule = require "playermailmodule"
+local PlayerChatModule = require "playerchatmodule"
+local PlayerTokenModule = require "playertokenmodule"
+local PlayerBaseModule = require "playerbasemodule"
+local PlayerCacheModule = require "playercachemodule"
+local PlayerChargeModule = require "playerchargemodule"
+local PlayerMapModule = require "playermapmodule"
+local gamelog = require "gamelog"
+local httprequest = require "httprequest"
+local PlayerShopModule = require "playershopmodule"
+local PlayerTitleModulle = require "playertitlemodule"
+local PlayerCityModule = require "playercitymodule"
+
+local Player = class("Player")
+
+function Player:ctor()
+    self.module = {}
+    self.module.thing = PlayerThingModule.new(self)
+    self.module.token = PlayerTokenModule.new(self)
+    self.module.chat = PlayerChatModule.new(self)
+    self.module.base = PlayerBaseModule.new(self)
+    self.module.cache = PlayerCacheModule.new(self)
+    self.module.charge = PlayerChargeModule.new(self)
+    self.module.mail = PlayerMailModule.new(self)
+    self.module.shop = PlayerShopModule.new(self)
+	--self.module.guild = PlayerGuildModule.new(self)
+    self.module.title = PlayerTitleModulle.new(self)
+    self.module.city = PlayerCityModule.new(self)
+    self.module.map = PlayerMapModule.new(self)
+
+    self.onlineflag = nil --上线标记
+    self.offlineflag = nil --离线标记
+    self.gmaccount = nil --是否为gm账号
+    self.entergame = nil --登录完
+
+    self.clientfd = nil --socket连接
+    self.afktimer = nil --暂离定时器
+
+    self.deviceid = nil --设备id
+    self.channelid = nil --渠道id
+    self.clientmodel = nil --客户端机型
+    self.clientmemory = nil --客户端内存容量
+    self.bindplatform = {}
+    self.ip = nil --客户端连上来的ip
+
+    --观察者数据
+    self.obfield = {}
+    self.obmonitor = {}
+end
+
+function Player:process_message(name)
+    if name ~= "keepalive" then
+        --self:teammodule():client_active()
+    end
+end
+
+function Player:get_device_id()
+    return self.deviceid or ""
+end
+
+function Player:get_channel_id()
+    return self.channelid or ""
+end
+
+function Player:enter_game_ok()
+    self.entergame = true
+end
+
+function Player:init_account(msg)
+    self._playerid = msg.playerid
+    self.account = msg.account
+    self.gmaccount = msg.gm
+    self.invatecode = msg.invatecode
+end
+
+function Player:is_gm()
+    return self.gmaccount and (self.gmaccount == 1)
+end
+--登出
+function Player:logout()
+    self.offlineflag = true
+end
+
+function Player:get_bind_platform()
+    return self.bindplatform
+end
+
+function Player:reset_client_args(ip, args)
+    self.deviceid = args.did or self.deviceid
+    self.channelid = args.channel_id or self.channelid
+    self.clientmodel = args.model or self.clientmodel
+    self.clientmemory = args.memory or self.clientmemory
+    self.ip = string.sub(ip, 0, string.find(ip, ":") - 1)
+    self.bindplatform = args.platform or {}
+
+    self:playerbasemodule():setIP(self.ip)
+
+    local event_log = {
+        event_type = gamelog.event_type.login,
+        action_id = event_action.action20001,
+        parastr = {
+            self.ip,
+            self.deviceid,
+            self.clientmodel,
+            self.clientmemory,
+        }
+    }
+    gamelog.write_event_log(self, event_log)
+end
+
+--登录
+function Player:login(fd, ip, args)
+    self.clientfd = fd
+    self.afktimer = nil
+    self:reset_client_args(ip, args)
+
+    httprequest.player_login(self, false)
+end
+--重连
+function Player:reconnect(fd, ip, args)
+    self.offlineflag = nil
+    self.afktimer = nil
+    self.clientfd = fd
+    self:reset_client_args(ip, args)
+
+    self:playerbasemodule():reconnect()
+
+    httprequest.player_login(self, true)
+end
+--暂离
+function Player:away(frame)
+    self.clientfd = nil
+    self.afktimer = timext.create_timer(get_static_config().globals.real_out_time)
+    self.entergame = nil
+
+    if not self:is_online() then
+        return 
+    end
+    for k,mod in pairs(self.module) do
+        mod:away()
+    end
+end
+--断开
+function Player:disconnect()
+    AgentManagerInst():disconnect_agent(self)
+end
+--socket是否连接
+function Player:is_conect()
+    return self.clientfd and true or false
+end
+--发消息到客户端
+function Player:send_msg(msg)
+    if not self.clientfd then
+        return
+    end
+    local package = string.pack (">s2", msg)
+    socket.write(self.clientfd, package)
+end
+function Player:low_priroty_msg(msg)
+    if not self.clientfd then
+        return
+    end
+    local package = string.pack (">s2", msg)
+    socket.lwrite(self.clientfd, package)
+end
+function Player:send_request(name, args, nocheck)
+    if not self.clientfd or not self:is_online() then
+        --LOG_ERROR("no clientfd")
+        return
+    end
+    if not nocheck and not self.entergame then
+        --LOG_ERROR("%s loss packet %s", self:getaccount(), name)
+        return
+    end
+    if not AgentManagerInst().s_filter_print[name] then
+        print(string.format("player[%s] s2c message:%s args:%s", self:playerbasemodule():get_name(), name, tostring(args)))
+    end
+    local str = AgentManagerInst().proto_request(name, args, 0)
+    self:send_msg(str)
+end
+--读库
+function Player:loaddb()
+    self._player_db = Database.new("player", common.get_playerdb_index(self._playerid), self._playerid)
+    for k,mod in pairs(self.module) do
+        mod:loaddb()
+    end
+
+    return true
+end
+--获取登录ip
+function Player:getIP()
+    return self.ip or self:playerbasemodule():getIP()
+end
+--玩家爱信息
+function Player:getplayerid()
+    return self._playerid
+end
+function Player:getaccount()
+    return self.account
+end
+
+--是否已经创建角色
+function Player:is_create_role()
+    return self:playerbasemodule():is_create_role()
+end
+
+function Player:get_address()
+    return interaction.pack_agent_address(self:getplayerid())
+end
+
+function Player:init()
+    if not self:is_create_role() then
+        return 
+    end
+
+    --这里初始化时 模块之间可能需要交叉调用
+    self.module.base:init()
+    self.module.thing:init()
+    self.module.token:init()
+    self.module.chat:init()
+    self.module.cache:init()
+    self.module.shop:init()
+    self.module.mail:init()
+    -- self.module.collect:init()
+    self.module.city:init()
+
+    --初始化观察者数据
+    self:init_observer()
+end
+
+--从服务那边初始化数据(该接口强制加载玩家数据或者每次玩家登陆都会调用,防止玩家初始化数据在公共服中被改变没有更新)
+function Player:init_service()
+    for name,mod in pairs(self.module) do
+        mod:init_service()
+    end 
+end
+
+--不需要online就执行的ai逻辑
+function Player:init_run(frame)
+    for _,mod in pairs(self.module) do
+        mod:init_run(frame)
+    end
+end
+
+--
+function Player:run(frame)
+    if self.afktimer and self.afktimer:expire() then
+        self:logout()
+    end
+    if self:is_online() then
+        for _,mod in pairs(self.module) do
+            mod:run(frame)
+        end 
+        if self.offlineflag --[[and not self:fightmodule():in_fight()]] then
+            --不在战斗 
+            self.offlineflag = nil
+            self:offline()
+            AgentManagerInst():logout_player(self)
+        end
+    end
+end
+
+--上线处理
+function Player:online()
+    if not self:is_create_role() then
+        return 
+    end
+    self.offlineflag = nil
+    self.onlineflag = true
+	local ok, err = xpcall(function()
+        for _,mod in pairs(self.module) do
+            mod:online()
+        end
+
+        local _,t = timext.system_refresh_time()
+        local curtime = timext.current_time()
+        local updatetime = self:playerbasemodule():get_update_time()
+        local lasttime = timext.next_event_time(updatetime, t.hour, t.min, t.sec)
+        if curtime > lasttime then
+            self:dayrefresh()
+        end
+        lasttime = timext.next_event_time(updatetime, t.hour, t.min, t.sec, timext.week_day.monday)
+        if curtime > lasttime then
+            self:weekrefresh()
+        end
+
+        interaction.register_agent(self:getplayerid())
+    end, debug.traceback)
+    if not ok then
+        LOG_ERROR("online function error %s", err)
+    end
+end
+
+--摧毁服务
+function Player:destroy()
+    for _,mod in pairs(self.module) do
+        mod:destroy()
+    end
+end
+
+function Player:is_online()
+    return self.onlineflag
+end
+
+--下线处理
+function Player:offline()
+    self.clientfd = nil
+
+    if not self:is_create_role() or not self:is_online() then
+        return 
+    end
+	
+    self.onlineflag = nil
+    self.entergame = nil
+
+    for k,mod in pairs(self.module) do
+        mod:offline()
+    end
+
+    interaction.unregister_agent(self:getplayerid())
+end
+--创建角色
+function Player:create(account, name, roleid)
+    self:playerbasemodule():create(account, name, roleid)
+    clusterext.send(get_cluster_service().gmserver, "lua", "register_player_account", self:getplayerid(), account)
+end
+--0点刷新
+function Player:dayrefresh()
+    if not self:is_create_role() or not self:is_online() then
+        return 
+    end
+
+    for _,mod in pairs(self.module) do
+        mod:dayrefresh()
+    end
+    
+    if self.entergame then
+        self:send_request("dayrefresh", {time = timext.current_time()})
+    end
+end
+
+--周一零点刷新
+function Player:weekrefresh()--周一0点刷新
+    if not self:is_create_role() or not self:is_online() then
+        return 
+    end
+
+	for _,mod in pairs(self.module) do
+        mod:weekrefresh()
+    end
+end
+
+--获取玩家总修为
+function Player:get_player_score()
+    -- local pet_score = self:summonmodule():get_summonmod_score()
+    -- local equip_score = self:thingmodule():get_clothes():getscore()
+    -- local player_score = self:playerbasemodule():getscore()
+    -- local partner_score = self:playerpartnermodule():getscore()
+    -- local horse_score = self:horsemodule():get_horsemod_fightpower()
+    -- local total_score = pet_score + player_score + partner_score + horse_score + equip_score
+    -- return total_score
+    return 0
+end
+
+function Player:getplayerdb()
+    return self._player_db
+end
+
+function Player:get_serverid()
+    return self:PlayerBaseModule():get_server_id()
+end
+
+---------------------------------------------------观察者信息-------------------------------------------------------------------
+function Player:init_observer()
+    self.obfield.playerid = self:getplayerid() or "nil"
+    local base = self:playerbasemodule() or "nil"
+    self.obfield.name = base:get_name() or "nil"
+    self.obfield.level = base:get_level() or "nil"
+    self.obfield.shape = base:get_shape() or "nil"
+    self.obfield.roleid = base:get_role_id() or "nil"
+    self.obfield.lastname = base:get_lastname() or "nil"
+    self.obfield.language = base:get_language() or "nil"
+	self.obfield.title = self:titlemodule():get_current_title() or "nil"
+    self.obfield.logintime = base:get_login_time() or "nil"
+end
+
+function Player:update_observer(field, value)
+    if self.obfield[field] == nil or self.obfield[field] == value then
+        return
+    end
+    self.obfield[field] = value or "nil"
+    for k,v in pairs(self.obmonitor) do
+        if v.keys[field] then
+            local ok,err = xpcall(v.func, debug.traceback, k, field, value)
+            if not ok then
+                LOG_ERROR(err)
+            end
+        end
+    end
+end
+
+function Player:monitor_observer(field, ob, func)
+    if type(field) ~= "table" then
+        field = { field }
+    end
+    local keys = {}
+    for _,v in pairs(field) do
+        keys[v] = true
+    end
+    self.obmonitor[ob] = {
+        keys = keys,
+        func = func,
+    }
+end
+
+function Player:get_observer_value(ob)
+    assert(self.obmonitor[ob], "error observer monitor")
+    local observer = self.obmonitor[ob]
+    local data = {}
+    for k,v in pairs(observer.keys) do
+        data[k] = (self.obfield[k] ~= "nil" and self.obfield[k] or nil)
+    end
+    return data
+end
+
+---------------------------------------------------获取模块-------------------------------------------------------------------
+function Player:thingmodule()
+    return self.module.thing
+end
+
+function Player:tokenmodule()
+    return self.module.token
+end
+
+function Player:chatmodule()
+    return self.module.chat
+end
+
+function Player:playerbasemodule()
+    return self.module.base
+end
+
+function Player:cachemodule()
+    return self.module.cache
+end
+
+function Player:chargemodule()
+    return self.module.charge
+end
+
+function Player:shopmoudle()
+    return self.module.shop
+end
+
+function Player:mailmodule()
+	return self.module.mail 
+end
+
+function Player:titlemodule()
+	return self.module.title
+end
+
+function Player:citymodule()
+    return self.module.city
+end
+
+function Player:mapmodule()
+    return self.module.map
+end
+
+return Player

@@ -1,0 +1,167 @@
+local skynet = require "skynet"
+local socket = require "socket"
+local httpd = require "http.httpd"
+local sockethelper = require "http.sockethelper"
+local urllib = require "http.url"
+local table = table
+local string = string
+local gmcommand = require "gmcommand"
+local config = require "config"
+
+local mode = ...
+
+--[[
+gm服务说明：
+监听http请求，执行gm命令
+]]
+if mode == "agent" then
+
+local function response(id, ...)
+	local ok, err = httpd.write_response(sockethelper.writefunc(id), ...)
+	if not ok then
+		-- if err == sockethelper.socket_error , that means socket closed.
+		skynet.error(string.format("fd = %d, %s", id, err))
+	end
+end
+
+local session_set = {}
+
+local CMD = {}
+function CMD.http_request(id,session)
+    socket.start(id)    -- 开s始接收一个 socket
+	-- limit request body size to 8192 (you can pass nil to unlimit)
+    -- 一般的业务不需要处理大量上行数据，为了防止攻击，做了一个 8K 限制。这个限制可以去掉。
+    local wait
+	local code, url, method, header, body = httpd.read_request(sockethelper.readfunc(id), 8192)
+	if code then
+		if code ~= 200 then-- 如果协议解析有问题，就回应一个错误码 code 。
+			response(id, code)
+		else--执行gm命令
+			local cmd, query = urllib.parse(url)
+            cmd = string.sub(cmd, 2)
+            if cmd ~= "favicon.ico" then--忽略这个包
+                local param = query and urllib.parse_query(query) or {}
+                local f = gmcommand[cmd]
+                if not f then
+                    skynet.error("no found http request ", cmd)
+                else
+                    skynet.error(string.format("http request[%s] param:%s", cmd, tostring(param)))
+                    ret, wait  = f(session, param)
+
+                    if not wait and ret then
+                        response(id, code, tostring(ret))
+                    end
+                end
+            else
+                print(cmd)
+            end
+		end
+	else-- 如果抛出的异常是 sockethelper.socket_error 表示是客户端网络断开了。
+		if url == sockethelper.socket_error then
+			skynet.error("socket closed")
+		else
+			skynet.error(url)
+		end
+	end
+    if not wait then
+	    socket.close(id)
+    else
+        session_set[session] = {id, code}
+    end
+end
+
+local function to_json_string(obj)
+    local getIndent, quoteStr, wrapKey, wrapVal, dumpObj
+    getIndent = function(level)
+        return string.rep("\t", level)
+    end
+    quoteStr = function(str)
+        return '"' .. string.gsub(str, '"', '\\"') .. '"'
+    end
+    wrapKey = function(val)
+        if type(val) == "string" then
+            return quoteStr(val)
+        else
+            return tostring(val)
+        end
+    end
+    wrapVal = function(val, level)
+        if type(val) == "table" then
+            return dumpObj(val, level)
+        elseif type(val) == "number" then
+            return val
+        elseif type(val) == "string" then
+            return quoteStr(val)
+        else
+            return tostring(val)
+        end
+    end
+    dumpObj = function(obj, level)
+        if type(obj) ~= "table" then
+            return wrapVal(obj)
+        end
+        level = level + 1
+        local tokens = {}
+        tokens[#tokens + 1] = "{"
+        for k, v in pairs(obj) do
+            tokens[#tokens + 1] = getIndent(level) .. wrapKey(k) .. ":" .. wrapVal(v, level) .. ","
+        end
+        tokens[#tokens + 1] = getIndent(level - 1) .. "}"
+        return table.concat(tokens, "\n")
+    end
+    return dumpObj(obj, 0)
+end
+
+function http_response(session, ret)
+    local t = session_set[session]
+    if not t then
+        skynet.error(string.format("not found http response session[%d] ret[%s]", session, tostring(ret)))
+        return 
+    end
+    if type(ret) ~= "table" then
+        ret = { ["ret"] = ret }
+    end
+    response(t[1], t[2], string.format("Content-type: text/html; charset=utf-8\n%s", to_json_string(ret)))
+    socket.close(t[1])
+
+    session_set[session] = nil
+end
+
+skynet.start(function()
+	skynet.dispatch("lua", function (_,_,cmd,...)
+        local f = CMD[cmd]
+        f(...)
+	end)
+end)
+
+else
+
+skynet.init(function() 
+end)
+
+skynet.start(function()
+	local agent = {}
+	for i= 1, 8 do-- 启动 8 个代理服务用于处理 http 请求
+		agent[i] = skynet.newservice(SERVICE_NAME, "agent")
+	end
+    local session = 1
+	local balance = 1
+    -- 监听一个 web 端口
+    local serverconfig = config.get_server_config()
+    local port = serverconfig.http_port
+    local ip = serverconfig.http_host
+	local id = socket.listen(ip, port)
+	skynet.error("Listen web port ", ip, port)
+	socket.start(id , function(id, addr)
+        -- 当一个 http 请求到达的时候, 把 socket id 分发到事先准备好的代理中去处理。
+		--skynet.error(string.format("socket[%d] %s connected, pass it to agent :%08x", id, addr, agent[balance]))
+		skynet.send(agent[balance], "lua", "http_request", id, session)
+		balance = balance + 1
+		if balance > #agent then
+			balance = 1
+		end
+        session = session + 1
+	end)
+end)
+
+end

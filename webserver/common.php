@@ -1,0 +1,139 @@
+<?php
+
+	include_once "config.php";
+
+	define("CACHE_TIME", 60 * 30);	#缓存时间
+	define("SERVER_LIST", "serverlist");	#redis 服务器列表key
+	define("DEFAULT_SERVER", "serverdefault");	#账号默认服务器key
+	define("APPID", "10029");	#appid(飞鱼app)
+	define("APPKEY", "bdc96026c4fb2bdbe86cf2c29aaf39c9");	#appkey(飞鱼app)
+	define("CHARGEKEY", "79cda9fd45c0fc0fd240dfc120c8172e");
+	define("SIGNTIME", 12 * 60 * 60); #sign有效时间
+	define("IOSBUNDLE", "com.feimi.ios.SummonersLeague"); 	#ios 包名
+	define("NOCACHE", false);	#是否不查询缓存数据
+
+	#google key
+	define("GOOGLEKEY", "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAoy4Lud9gEvLFcGjAV++10vHzHETZCynxMbLIeEAyo4dAEFK3NeRud0PVEtjCbesVcYNa3nglm6cIAR5hir4f56yGwSicwMJP+EUG9aysOLuPkLUo3ejBK9z81XkAB7sSwKzhcudOsLQYifDYKqG8H/IU3oco1y+84t9nemt25zwHQABCTKZ5f7wIZwAKxHH8MyHkpaWkZTY7g8NLrL98etWiXCA7A1JNiiwgpNXfA97FS/wbXJ+B+ZrPxmt8GRUYq94poI58jnHyeSrhtbkUtPOTk0lmSvhVuCTTOB8wiZCAQnoD2+fBaVHUi0uss1xjUBt6D6PU3V+gm+gH+xdchQIDAQAB");
+	
+	define("LOG", "LOG");	#redis log field
+	define("PLATFORMCACHE", "PLATFORMCACHE");	#redis google cache field
+	define("PLATFORMTIME", 15 * 24 * 60 * 60);	#redis google cache time field
+
+	define("LOCKIP", "LOCKIP"); #redis lock ip field
+	define("LOCKACCOUNT", "LOCKACCOUNT"); #redis lock account field
+
+	#face book app info
+	define("FBID", 362619877528441);
+	define("FBSECRET", "df2309bb1b5c58224434eec152a1aeb8");
+
+	define("PLAYER_SECTION", 1000000);	#服务器玩家角色id区段
+
+
+	date_default_timezone_set('UTC'); //去处date()警告
+	
+
+	#获取账号key
+	function accountkey($serverid, $account) {
+		return $serverid . $account;
+	}
+	#获取服务器key
+	function serverkey($serverid) {
+		return "server" . $serverid;
+	}
+	#获取世界key
+	function worldkey($worldid) {
+		return "world" . $worldid;
+	}
+	#获取账号默认key
+	function defaultkey($account) {
+		return "default" . $account;
+	}
+	#获取设备号key
+	function devicekey($device) {
+		return "device" . $device;
+	}
+	#获取平台key
+	function platformkey($platform, $key) {
+		return $platform . $key;
+	}
+
+	/**
+	 * 签名函数 for php
+	 * @param array  $params   url参数
+	 * @param string $app_key  签名key
+	 * @example MD5(urlencode('k1=v1&k2=v2') + '&' + app_key)
+	**/
+	function request_sign($params, $app_key) {
+	    // 按键ASCII码值asc排序
+	    ksort($params);
+	
+	    // 重组键值对，url参数方式连接
+	    $md5_str = '';
+	
+	    foreach ($params as $k => $v) {
+	
+	        $md5_str .= '&' . $k . '=' . $v;
+	
+	    }
+	
+	    // url编码
+	    $md5_str = urlencode(substr($md5_str, 1));
+	    // 与密钥app_key md5加密
+	    $md5_check = md5($md5_str . '&' . $app_key);
+	
+	    return $md5_check;
+	}
+
+	define("ORDER", "ORDER");#charge order redis key
+	define("ANDROID_TB", "charge_android");#android charge sql table
+	define("APPLE_TB", "charge_ios");#ios charge sql table
+	define("CHAREKEY", "CHAREKEY");#charge account redis key
+	define("SETUP", "SETUP");#setup redis key
+
+	#https请求
+	function httpscurl($url) {
+		$curl = curl_init();
+		/*
+		$proxy = "http://192.168.1.110:8118";
+		curl_setopt($curl, CURLOPT_PROXY, $proxy);
+		*/
+		curl_setopt($curl, CURLOPT_URL, $url);
+		curl_setopt($curl, CURLOPT_RETURNTRANSFER, 1);
+		curl_setopt($curl, CURLOPT_TIMEOUT, 60);
+		curl_setopt($curl, CURLOPT_SSL_VERIFYPEER, false);//这个是重点。
+		$data = curl_exec($curl);
+		curl_close($curl);
+		return $data;
+	}
+
+	#获取客户端ip
+	function getClientIP(){
+		$cip = null;
+		if(!empty($_SERVER["REMOTE_ADDR"])){
+		  $cip = $_SERVER["REMOTE_ADDR"];
+		} elseif (!empty($_SERVER["HTTP_CLIENT_IP"])) {
+		  $cip = $_SERVER["HTTP_CLIENT_IP"];
+		} elseif(!empty($_SERVER["HTTP_X_FORWARDED_FOR"])){
+		  $cip = $_SERVER["HTTP_X_FORWARDED_FOR"];
+		} else {
+		  
+		}
+		return $cip;
+	}
+
+
+	//平台
+	$PLATFORM = array(
+		"gamecenter", 
+		"googleplay",
+		"facebook",
+		"feiyu"
+	);
+
+	//生成唯一id
+	function createuid() {
+		return md5(uniqid());
+	}
+
+	header("Content-Type:text/html;charset=utf-8");
+?>

@@ -1,0 +1,414 @@
+local interaction = require "interaction"
+local timext = require "timext"
+local Random = require "random"
+local config_func = require "static_config"
+local client_request =  require "client_request"
+local common = require "common"
+local chatcommon = require "chatcommon"
+local chatinterface = require "chatinterface"
+local clusterext = require "clusterext"
+local mailinterface = require "mailinterface"
+local thinginterface = require "thinginterface"
+local skynet = require "skynet"
+
+local resource_type = require "resource_type"
+local gamelog = require "gamelog"
+local storagecommon = require "storagecommon"
+local httprequest = require "httprequest"
+local thingcommon = require "thingcommon"
+local weightwrap = require "weightwrap"
+
+local chat_code = chatcommon.chat_message_code
+
+local CMD = {}
+
+function CMD.sendmail(player, temp)
+    if #temp >= 3 then
+        local mailid = tonumber(temp[2])
+        local num = tonumber(temp[3])
+        local t = {}
+        t.mailid = mailid
+        t.params = { "test1", "test2" }
+        t.tokens = { YinLiang = 10000, XianYu = 20 }
+        t.things = { [999999998] = 1 }
+        for i=1,num do
+            mailinterface.send_mail(player:getplayerid(), mailid, t.params, t.tokens, things)
+        end
+    end
+    return true
+end
+
+function CMD.charge(player, temp)
+    player:chargemodule():charge_ship(temp[2], 1)
+end
+
+function CMD.proto(player, temp)
+    client_request[temp[2]](player)
+end
+
+
+function CMD.gmpush(player, temp)
+    clusterext.send(get_cluster_service().gmserver, "lua", "gm_push", tonumber(temp[2]))
+end
+
+function CMD.addlevel(player, temp)
+    if #temp >= 2 then
+        player:playerbasemodule():alter_level(tonumber(temp[2]))
+        return true
+    end
+end
+
+function CMD.addthing(player, temp)
+    if #temp >= 3 then
+        local thingLogParam = {
+            action_id = object_action.action1010,
+        }
+        player:thingmodule():add_thing(tonumber(temp[2]), tonumber(temp[3]), thingLogParam)
+        return true
+    end
+end
+
+function CMD.addfood(player, temp)
+    if #temp >= 2 then
+        local currency = "Food"
+        local num = tonumber(temp[2])
+        local logparam = {
+            action_id = object_action.action1010,
+        }
+        if num > 0 then
+            player:tokenmodule():addsystoken(currency, num, logparam)
+        elseif num < 0 then
+            player:tokenmodule():subtoken(currency, math.abs(num), logparam)
+        end
+        return true
+    end
+end
+
+function CMD.addwater(player, temp)
+    if #temp >= 2 then
+        local currency = "Water"
+        local num = tonumber(temp[2])
+        local logparam = {
+            action_id = object_action.action1010,
+        }
+        if num > 0 then
+            player:tokenmodule():addsystoken(currency, num, logparam)
+        elseif num < 0 then
+            player:tokenmodule():subtoken(currency, math.abs(num), logparam)
+        end
+        return true
+    end
+end
+
+function CMD.addiron(player, temp)
+    if #temp >= 2 then
+        local currency = "Iron"
+        local num = tonumber(temp[2])
+        local logparam = {
+            action_id = object_action.action1010,
+        }
+        if num > 0 then
+            player:tokenmodule():addsystoken(currency, num, logparam)
+        elseif num < 0 then
+            player:tokenmodule():subtoken(currency, math.abs(num), logparam)
+        end
+        return true
+    end
+end
+
+
+function CMD.addgas(player, temp)
+    if #temp >= 2 then
+        local currency = "Gas"
+        local num = tonumber(temp[2])
+        local logparam = {
+            action_id = object_action.action1010,
+        }
+        if num > 0 then
+            player:tokenmodule():addsystoken(currency, num, logparam)
+        elseif num < 0 then
+            player:tokenmodule():subtoken(currency, math.abs(num), logparam)
+        end
+        return true
+    end
+end
+
+function CMD.addmoney(player, temp)
+    if #temp >= 2 then
+        local currency = "Money"
+        local num = tonumber(temp[2])
+        local logparam = {
+            action_id = object_action.action1010,
+        }
+        if num > 0 then
+            player:tokenmodule():addsystoken(currency, num, logparam)
+        elseif num < 0 then
+            player:tokenmodule():subtoken(currency, math.abs(num), logparam)
+        end
+        return true
+    end
+end
+
+function CMD.disconnect(player)
+    player:disconnect()
+end
+
+function CMD.systime(player, temp)
+    local param = temp[2]
+    if param then
+        if temp[3] then
+            param = param .. " " .. temp[3]
+        end
+        clusterext.send(get_cluster_service().interactionhubd, "lua", "gm_system_time", param)
+    else
+        local msg = {}
+        msg.chnl = 1
+        msg.content = timext.to_unix_time_stamp() .. "今天是周" .. timext.weekday()
+        client_request.channelchat(player, msg)
+    end
+end
+
+function CMD.nextday(player, temp)
+    --默认五点
+    local delay = temp[3] and 5 or 0 --QA要求延迟5秒, 参数为空不延迟
+    local hour = tonumber(temp[2]) or 5
+    local zero = timext.day_zero_time()
+    local next_t = zero + 86400 + ( hour * 3600 ) - delay
+    local time_stamp = timext.to_unix_time_stamp(next_t)
+    clusterext.send(get_cluster_service().interactionhubd, "lua", "gm_system_time", time_stamp)
+end
+
+function CMD.nextweek(player, temp)
+    --默认五点
+    local delay = temp[3] and 5 or 0 --QA要求延迟5秒, 参数为空不延迟
+    local hour = tonumber(temp[2]) or 5
+    local last_monday_zero = timext.last_monday_time()
+    local next_t = last_monday_zero + ( 86400 * 7 ) + ( hour * 3600 ) - delay
+    local time_stamp = timext.to_unix_time_stamp(next_t)
+    clusterext.send(get_cluster_service().interactionhubd, "lua", "gm_system_time", time_stamp)
+end
+
+function CMD.promotion(player, temp)
+    player:chargemodule():open_promotion()
+end
+
+-----------------------------------------------------------------------------------------------------------------
+local client_request = require "client_request"
+
+function CMD.dotask(player, temp)
+	local msg = {}
+	msg.type=tonumber(temp[2])
+	msg.npctype = 1
+	msg.npcobjid = 7008
+	msg.taskid = tonumber(temp[3])
+	client_request.reqtaskaction(player,msg)
+end
+
+function CMD.dtask(player, temp)
+	local msg ={}
+	msg.type=tonumber(temp[2])
+	msg.npctype = 1
+	msg.npcobjid = 1
+	msg.taskid = tonumber(temp[3])
+	client_request.delivetask(player, msg)
+end
+
+
+function CMD.pvpc(player)
+	client_request.reqpvpcopyteleport(player, {type = 1})
+end
+
+function CMD.look(player)
+	client_request.reqleavepvpcopy(player, {type = 1})
+end
+
+function CMD.get(player)
+	client_request.reqrivalinfo(player, {type = 1})
+end
+
+function CMD.fulltoken(player, temp)
+    local token = tonumber(temp[2]) or 1000000
+    local tokencommon = require "tokencommon"
+    local logparam = {
+        action_id = object_action.action1010,
+    }
+    for name,_ in pairs(tokencommon.check_field) do
+        player:tokenmodule():addtoken(name, token, logparam)
+    end
+end
+
+------------------------------------------------------------------------------------------------------------------
+local function pmcommand(player, str)
+    local ret = true
+    str = string.sub(str, 2)
+    local temp = {}
+    for w in string.gmatch(str, "%g+") do
+        table.insert(temp, w)
+    end
+    local func = CMD[temp[1]]
+    if func then
+        ret = func(player, temp)
+        player:chatmodule():gmcommand_log(str)
+    end
+    return ret  
+end
+
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+function client_request.gmcommand(player, msg)
+    if player:is_gm() then
+        local content = msg.content
+        if content[1] == "/" and pmcommand(player, content) then--PM命令 
+            return { code = chat_code.pm_command, content = content }
+        end
+    end
+    return { code = chat_code.unkown, content = msg.content }
+end
+
+--频道聊天
+function client_request.reqchannelchat(player, msg, rawmsg)
+    local code = chat_code.unkown
+    local module = player:chatmodule()
+    repeat
+        if player:playerbasemodule():is_silence() then
+            code = chat_code.be_silence
+            break
+        end
+
+        local chatmsg = rawmsg.msg
+        --参数验证
+        if not chatmsg or not table.find(chatcommon.chat_type, chatmsg.type) then
+            code = chat_code.param_error
+            break
+        elseif chatmsg.type == chatcommon.chat_type.voice and ( not chatmsg.voice or not chatmsg.voice.voicetime ) then
+            code = chat_code.param_error
+            break
+        elseif not table.find(chatcommon.chat_chnl, msg.chnl) or msg.chnl == chatcommon.chat_chnl.chnl_system then
+            code = chat_code.param_error
+            break
+        elseif chatmsg.node and #chatmsg.node >= 5 then
+            code = chat_code.param_error
+            break
+        end
+
+        local chattype = chatmsg.type
+        local content = nil
+        if chattype == chatcommon.chat_type.content then --文本聊天验证
+            code = module:check_word(chatmsg.content)--验证字符
+            if code ~= chat_code.success then
+                break
+            end
+            content = module:filter_word(msg.chnl, chatmsg.content)--字符处理
+
+        elseif chattype == chatcommon.chat_type.voice then  --语音验证
+            --部分频道不能语音
+            if msg.chnl == chatcommon.chat_chnl.chnl_servertyphon or 
+               msg.chnl == chatcommon.chat_chnl.chnl_worldtyphon  then
+                code = chat_code.param_error
+               break
+            end
+        end
+
+        --消耗前置验证
+        local tmpcode, consume = module:check_channel_logic(msg.chnl)
+        if tmpcode ~= chat_code.success then
+            code = tmpcode
+            break
+        end
+
+        --消耗
+        if consume.tokentype and consume.needtoken then
+            player:tokenmodule():subtoken(consume.tokentype, consume.needtoken)
+        end        
+        if consume.needitem and consume.neednum then
+            player:thingmodule().bag:consume_thing(consume.needitem, consume.neednum) 
+        end
+
+        module:send_channel_chat(msg.chnl, chatmsg)
+        module:open_channel_timer(msg.chnl)
+        code = chat_code.success
+    until 0;
+    return { code = code, chnl = msg.chnl }
+end
+
+--私聊
+function client_request.reqprivatechat(player, msg, rawmsg)
+    local code = chat_code.unkown
+    local module = player:chatmodule()
+    repeat
+        if player:playerbasemodule():is_silence() then
+            code = chat_code.be_silence
+            break
+        end
+
+        local chatmsg = rawmsg.msg
+        --参数验证
+        if not chatmsg or not table.find(chatcommon.chat_type, chatmsg.type) then
+            code = chat_code.param_error
+            break
+        elseif chatmsg.type == chatcommon.chat_type.voice and ( not chatmsg.voice or not chatmsg.voice.voicetime ) then
+            code = chat_code.param_error
+            break
+        elseif chatmsg.node and #chatmsg.node >= 5 then
+            code = chat_code.param_error
+            break
+        end
+
+        local chattype = chatmsg.type
+        local content = nil
+        if chattype == chatcommon.chat_type.content then --文本聊天验证
+            code = module:check_word(chatmsg.content)--验证字符
+            if code ~= chat_code.success then
+                break
+            end
+            content = module:filter_word(msg.chnl, chatmsg.content)--字符处理
+
+        elseif chattype == chatcommon.chat_type.voice then  --语音验证
+            --部分频道不能语音
+            if msg.chnl == chatcommon.chat_chnl.chnl_servertyphon or 
+               msg.chnl == chatcommon.chat_chnl.chnl_worldtyphon  then
+                code = chat_code.param_error
+               break
+            end
+        end
+
+        if module:on_private_cd() or module:islock() then
+            code = chat_code.whisper_cd
+            break
+        end
+
+        module:create_private_timer()
+        code = module:call_send_private_chat(msg.playerid, chatmsg)
+    until 0;
+    return { code = code, playerid = msg.playerid }
+end
+
+function client_request.reqchatrecord(player, msg)
+    local module = player:chatmodule():req_chatrecord()
+end
+
+--翻译文件
+function client_request.reqtranslate(player, msg)
+    if not msg.tab or table.empty(msg.tab) then
+        return { code = chat_code.trans_empty }
+    end
+
+    local tab = table.copy(msg.tab)
+    local from, to
+    local language = player:playerbasemodule():get_language()
+    for i=1,50 do --限制翻译个数
+        local tmp = tab[i]
+        if tmp then
+            if tmp.btrans and tmp.text and string.len(tmp.text) <= chatcommon.translate_size then
+                local text, fm, t = httprequest.translate(tmp.text, language)
+                tmp.text = text 
+                from = fm
+                to = t              
+            end
+        else
+            break
+        end
+    end
+    return { tab = tab, code = chat_code.success, from = from, to = to }
+end
+
+

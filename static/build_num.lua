@@ -1,0 +1,20 @@
+local build_num ={
+{Buildtype=1,Name="tid_buildname_1",Station={3,3},Originbuild=true,OriginStation={3,8},OriginLevel=1,Num=1,},
+{Buildtype=2,Name="tid_buildname_2",Station={3,5},Originbuild=true,OriginStation={0,8},OriginLevel=1,Mainlevel={1},Num=1,},
+{Buildtype=3,Name="tid_buildname_3",Station={3,1},Originbuild=true,OriginStation={6,11},OriginLevel=1,Mainlevel={1},Num=1,},
+{Buildtype=4,Name="tid_buildname_4",Station={1,2},Canedit=true,OriginLevel=0,Mainlevel={1},Num=1,},
+{Buildtype=5,Name="tid_buildname_5",Station={3,1},Canedit=true,OriginLevel=0,Mainlevel={3},Num=1,},
+{Buildtype=6,Name="tid_buildname_6",Station={3,1},Canedit=true,OriginLevel=0,Mainlevel={3},Num=1,},
+{Buildtype=7,Name="tid_buildname_7",Station={3,2},Canedit=true,OriginLevel=0,Mainlevel={3},Num=1,},
+{Buildtype=8,Name="tid_buildname_8",Station={3,3},Canedit=true,OriginLevel=0,Mainlevel={3},Num=1,},
+{Buildtype=9,Name="tid_buildname_9",Station={3,1},Canedit=true,OriginLevel=0,Mainlevel={3,3,3,4},Num=4,},
+{Buildtype=10,Name="tid_buildname_10",Station={3,1},Canedit=true,OriginLevel=0,Mainlevel={3,3,3,4},Num=4,},
+{Buildtype=11,Name="tid_buildname_11",Station={3,1},Canedit=true,OriginLevel=0,Mainlevel={3,3,3,4},Num=4,},
+{Buildtype=12,Name="tid_buildname_12",Station={3,1},Canedit=true,OriginLevel=0,Mainlevel={3,3,3,4},Num=4,},
+{Buildtype=13,Name="tid_buildname_13",Station={3,1},Canedit=true,OriginLevel=0,Mainlevel={5},Num=1,},
+{Buildtype=14,Name="tid_buildname_14",Station={3,1},Canedit=true,OriginLevel=0,Mainlevel={5},Num=1,},
+{Buildtype=15,Name="tid_buildname_15",Station={3,1},Canedit=true,OriginLevel=0,Mainlevel={1},Num=1,},
+{Buildtype=16,Name="tid_buildname_16",Station={3,1},Canedit=true,OriginLevel=0,Mainlevel={1},Num=1,},
+{Buildtype=17,Name="tid_buildname_17",Station={2,2},Canedit=true,OriginLevel=0,Mainlevel={5},Num=1,},
+{Buildtype=18,Name="tid_buildname_18",Station={3,1},Originbuild=true,OriginStation={3,11},OriginLevel=1,Mainlevel={1},Num=1,}
+ } return build_num

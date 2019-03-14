@@ -1,0 +1,52 @@
+thread = 8
+harbor = 0
+start = "cluster_guild"	-- main script
+bootstrap = "snlua bootstrap"	-- The service for bootstrap
+cluster = "./config/serverconfig.lua"
+
+--log
+logger = nil --"./log/guild_log.log"
+logpath = "."
+log_dirname = "log"
+log_basename = "guild"
+
+-- 用于加载LUA服务的LUA代码
+lualoader = "skynet/lualib/loader.lua"
+preload = "global/preload.lua"	-- run preload.lua before every lua service run
+
+-- LUA服务所在位置
+gameservice	= "./server/?.lua;" ..
+			  "./server/guild/?.lua;" ..
+			  "./server/log/?.lua;" ..
+			  "./server/interaction/?.lua;" ..
+			  "./server/gamelog/?.lua;" ..
+			  "./server/cluster/?.lua;"
+
+luaservice = "skynet/service/?.lua;" .. gameservice
+snax = gameservice
+
+-- C编写的服务模块路径
+cpath = "skynet/cservice/?.so"
+
+-- 将添加到 package.path 中的路径，供 require 调用。
+lua_path = "skynet/lualib/?.lua;" .. 
+		   "skynet/lualib/snax/?.lua;" ..
+		   "server/?.lua;" ..
+		   "global/?.lua;" .. 
+		   "proto/?.lua;" ..
+		   "server/guild/?.lua;" ..
+		   "server/thing/?.lua;" ..
+		   "server/log/?.lua;" ..
+		   "server/chat/?.lua;" ..
+		   "server/interaction/?.lua;" ..
+		   "server/token/?.lua;" ..
+		   "server/shop/?.lua;" ..
+		   "server/gamelog/?.lua;" ..
+		   "config/?.lua;" ..
+		   "server/cluster/?.lua;" 
+
+-- 将添加到 package.cpath 中的路径，供 require 调用。
+lua_cpath = "skynet/luaclib/?.so;luaclib/?.so"
+
+-- 后台模式
+--daemon = "./skynet.pid"

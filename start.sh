@@ -1,0 +1,65 @@
+#!/bin/sh
+function start_game()
+{
+	export GAME_NAME=$1
+	echo $GAME_NAME
+	`pwd`/skynet/skynet bootstrap/cluster/config_game
+}
+
+function start_login()
+{
+	`pwd`/skynet/skynet bootstrap/cluster/config_login
+}
+
+function start_interaction()
+{
+	`pwd`/skynet/skynet bootstrap/cluster/config_interaction
+}
+
+function start_world()
+{
+	`pwd`/skynet/skynet bootstrap/worldserver/config_world
+}
+
+function start_gm()
+{
+	`pwd`/skynet/skynet bootstrap/cluster/config_gm
+}
+
+function start_no_cluster()
+{	
+	`pwd`/skynet/skynet bootstrap/config
+}
+
+
+if [ $# = 0 ]; then
+	start_no_cluster;
+	exit 1;
+fi
+
+if [ $1 = "all" ]; then
+	start_interaction;
+	start_login;
+	sleep 1s;
+	start_game sample;
+fi
+
+if [ $1 = "game" ]; then
+	start_game $2;
+fi
+
+if [ $1 = "login" ]; then
+	start_login;
+fi
+
+if [ $1 = "interaction" ]; then
+	start_interaction;
+fi
+
+if [ $1 = "world" ]; then
+	start_world;
+fi
+
+if [ $1 = "gm" ]; then
+	start_gm;
+fi

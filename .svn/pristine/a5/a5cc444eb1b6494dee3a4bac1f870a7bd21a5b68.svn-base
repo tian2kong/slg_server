@@ -1,0 +1,423 @@
+local skynet = require "skynet"
+local Database = require "database"
+local timext = require "timext"
+local common = require "common"
+local interaction = require "interaction"
+--local GlobalData = require "globaldata"
+local playercommon = require "playercommon"
+require "static_config"
+local config = require "config"
+local clusterext = require "clusterext"
+local msgqueue = require "skynet.queue"
+local ServiceBase = require "servicebase"
+local class = require "class"
+local CacheGlobalData = require "cacheglobaldata"
+local agent_list = {}--记录玩家服务器  离线也会有
+
+local playerdatabase = {}
+local player_map = {}--
+local player_onlinemap = {}--在线玩家数据
+local cache_timer_set = {}
+local watcher = {}--观察者
+local marker = {}--被观察者
+local s_global = nil
+local s_msgqueue = msgqueue()
+
+local cache_sql = {
+    select_base = [[select a.playerid,a.name,a.level,a.lastname,a.shape,a.roleid,a.logintime,a.language,title.curtitleid, title.curtitleparam  
+        from player as a 
+        left outer join  player_title as title on a.playerid = title.playerid 
+        WHERE a.playerid in (%s);]],
+    select_name = "select playerid from player where name like '%s';",
+    select_partner = "select playerid, partnerid, level, rei from partner where playerid in (%s);",
+    select_allply = "select playerid from player where level >= %d and level <= %d;",
+}
+
+local CMD = {}
+
+--是否为角色名字
+function CMD.is_player_name(name)
+    local ret
+    for _,db in pairs(playerdatabase) do
+        local query_ret = db:syn_query_sql(string.format(cache_sql.select_name, common.mysqlEscapeString(name)))
+        if query_ret then
+            local query_obj = query_ret[1]
+            if query_obj then
+                ret = true
+                break
+            end
+        end
+    end
+    skynet.retpack(ret)
+end
+
+--
+function CMD.register_agent(playerid, agent)
+    agent_list[playerid] = agent
+    skynet.retpack(true)
+end
+function CMD.unregister_agent(playerid)
+    s_msgqueue(function()
+        agent_list[playerid] = nil
+    end)
+    skynet.retpack(true)
+end
+--
+function CMD.player_command(response, playerid, ...)
+    local ret
+    if playerid then
+        local param = table.pack(...)
+        s_msgqueue(function()
+            local agent = agent_list[playerid]
+            if not agent then
+                agent = skynet.call(get_cluster_service().logind, "lua", "gm_login_account", playerid)
+            end
+            if agent then
+                ret = interaction.call(agent, "lua", table.unpack(param, 1, param.n))
+            end
+        end)
+    end
+    if response then
+        skynet.retpack(ret)
+    end
+end
+
+--获取玩家缓存数据
+function CMD.get_player_info(arrid, arrfield)
+    local dbtemp = {}
+    --内存数据找不到则查找DB数据
+    for _,id in pairs(arrid) do
+        if not player_map[id] then
+            local dbindex = common.get_playerdb_index(id)
+            if not dbtemp[dbindex] then
+                dbtemp[dbindex] = {}
+            end
+            table.insert(dbtemp[dbindex], id)
+        end
+    end
+    for index,setid in pairs(dbtemp) do
+        local db = playerdatabase[index]
+        local where = table.concat(setid, ",")
+        local query_ret = db:syn_query_sql(string.format(cache_sql.select_base, where))
+        if query_ret then
+            for _,temp in pairs(query_ret) do
+                if not player_map[temp.playerid] then
+					local obj = {}
+					obj.name = temp.name
+					obj.level = temp.level
+					obj.shape = temp.shape
+                    obj.roleid = temp.roleid
+					obj.language = temp.language
+                    local rolecfg = get_static_config().role[obj.roleid]
+                    if rolecfg then
+                        obj.race = rolecfg.Race
+                    end
+					obj.lastname = temp.lastname
+					obj.logintime = temp.logintime
+					if  temp.curtitleid then 
+						obj.title = {id = temp.curtitleid, param = temp.curtitleparam }
+					end
+                    player_map[temp.playerid] = obj
+                    cache_timer_set[temp.playerid] = timext.create_timer(common.cache_time)
+                end
+            end
+        end
+    end
+    local ret = {}
+    --赋值结果
+    for _,id in pairs(arrid) do
+        if player_map[id] then
+            ret[id] = {}
+            if not arrfield or table.empty(arrfield) then
+                ret[id] = player_map[id]
+            else
+                for _,v in pairs(arrfield) do
+                    ret[id][v] = player_map[id][v]
+                end
+            end
+        end
+    end
+    skynet.retpack(ret)
+end
+
+--获取玩家伙伴数据
+function CMD.get_player_partner_info(arrid)
+    local dbtemp = {}
+    for _,id in pairs(arrid) do
+        local dbindex = common.get_playerdb_index(id)
+        if not dbtemp[dbindex] then
+            dbtemp[dbindex] = {}
+        end
+        table.insert(dbtemp[dbindex], id)
+    end
+    local ret = {}
+    for index,setid in pairs(dbtemp) do
+        local db = playerdatabase[index]
+        local where = table.concat(setid, ",")
+        print(string.format(cache_sql.select_partner, where))
+        local query_ret = db:syn_query_sql(string.format(cache_sql.select_partner, where))
+        if query_ret then
+            print("query_ret ...", query_ret)
+            for _,temp in pairs(query_ret) do
+                if not ret[temp.playerid] then
+                    ret[temp.playerid] = {}
+                end
+                ret[temp.playerid][temp.partnerid] = temp
+                print(temp)
+            end
+        end
+    end
+    skynet.retpack(ret)
+end
+
+--更新玩家基础信息
+local function raw_update_player_info(playerid, field, value)
+    local t = player_map[playerid]
+    local old 
+    if t then
+        old = t[field]
+        t[field] = value
+    end
+    local target = marker[playerid]
+    --信息通知给监听者
+    if target then
+        local group = {}
+        for id,_ in pairs(target) do
+            local monitor = watcher[id]
+            if monitor then
+                local temp = monitor.target[playerid]
+                if temp then
+                    if temp[field] then
+                        table.insert(group, monitor.address)
+                    end
+                else
+                    LOG_ERROR("cacheservice update unkown watcher marker %d", playerid)
+                end
+            else
+                LOG_ERROR("cacheservice update unkown watcher %d", id)
+            end
+        end
+        interaction.send_to_group(group, "lua", "update_player_info", playerid, field, old, value)
+    end
+end
+function CMD.update_player_info(playerid, temp)
+    for k,v in pairs(temp) do
+        raw_update_player_info(playerid, k, v)
+    end
+end
+
+--获取开服时间
+function CMD.get_global_data()
+    local ret = {
+        opensertime = s_global:get_server_time(),
+    }
+    skynet.retpack(ret)
+end
+
+function CMD.player_login(obj)
+    player_map[obj.playerid] = obj
+    player_onlinemap[obj.playerid] = obj
+    cache_timer_set[obj.playerid] = nil
+
+    raw_update_player_info(obj.playerid, "online", true)
+end
+
+function CMD.player_logout(playerid)
+    local t = player_map[playerid]
+    if t then
+        cache_timer_set[playerid] = timext.create_timer(common.cache_time)
+    end
+    local monitor = watcher[playerid]
+    if monitor then
+        for id,_ in pairs(monitor.target) do
+            local t = marker[id]
+            if t then
+                t[playerid] = nil
+                if table.empty(t) then
+                    marker[id] = nil
+                end
+            else
+                LOG_ERROR("cacheservice logout unkown marker %d", id)
+            end
+        end
+    end
+    watcher[playerid] = nil
+    player_onlinemap[playerid] = nil
+    raw_update_player_info(playerid, "online", false)
+end
+
+--注册玩家监听数据
+function CMD.reg_player_monitor(playerid, address, target, field)
+    local monitor = watcher[playerid]
+    if not monitor then
+        watcher[playerid] = { address = address, target = {} }
+        monitor = watcher[playerid]
+    end
+    for _,id in pairs(target) do
+        local temp = monitor.target[id]
+        marker[id] = marker[id] or {}
+        marker[id][playerid] = true
+        if not temp then
+            monitor.target[id] = {}
+            temp = monitor.target[id]
+        end
+        for _,v in pairs(field) do
+            temp[v] = (temp[v] or 0) + 1
+        end
+    end
+end
+
+--反注册
+function CMD.unreg_player_monitor(playerid, target, field)
+    local monitor = watcher[playerid]
+    if monitor then
+        for _,id in pairs(target) do
+            local temp = monitor.target[id]
+            if temp then
+                for _,v in pairs(field) do
+                    if temp[v] then
+                        temp[v] = temp[v] - 1
+                        if temp[v] <= 0 then
+                            temp[v] = nil
+                        end
+                    end
+                end
+                if table.empty(temp) then
+                    monitor.target[id] = nil
+                    local t = marker[id]
+                    if t then
+                        t[playerid] = nil
+                        if table.empty(t) then
+                            marker[id] = nil
+                        end
+                    else
+                        LOG_ERROR("cacheservice unreg unkown marker %d", id)
+                    end
+                end
+            else
+                LOG_ERROR("cacheservice unrge unkown watcher %d", id)
+            end
+        end
+        if table.empty(monitor.target) then
+            watcher[playerid] = nil
+        end
+    end
+end
+
+
+--area:玩家的地区， except:剔除该集合玩家
+function CMD.search_player_lv_area(minlv, maxlv, area, except_set)
+    local num = 0
+    except_set = except_set or {}
+    local result = {}
+    local MaxSize = get_static_config().globals.search_friend_size
+    for k,v in pairs(player_onlinemap) do
+        if MaxSize <= num then
+            break
+        end
+        
+        if not except_set[k] then
+            if v.level and minlv <= v.level and maxlv >= v.level then--等级筛选
+                result[k] = v
+                num = num + 1
+            end
+        end
+    end
+    skynet.retpack(result)
+end
+
+--模糊查找玩家“matchstr”匹配ID，或者名字，"except_set"剔除ID
+function CMD.search_player(matchstr, except_set)
+    local result = {}
+    local num = 0
+    except_set = except_set or {}
+    local imatch = tonumber(matchstr)
+    if player_onlinemap[imatch] and not except_set[imatch] then--ID查找
+        result[imatch] = player_onlinemap[imatch]
+        num = num + 1
+    end
+
+    for k,v in pairs(player_onlinemap) do
+        if get_static_config().globals.search_friend_size <= num then
+            break
+        end
+
+        --string.find (s, pattern [, init [, plain]])  第四个参数 ture:关闭匹配模式
+        if not except_set[k] and string.find(v.name, matchstr, nil, true) then
+            result[k] = v
+            num = num + 1
+        end
+    end
+    skynet.retpack(result)
+end
+
+--通过名字查询玩家id
+function CMD.search_player_by_name(name)
+    local playerid
+    for _,db in pairs(playerdatabase) do
+        local query_ret = db:syn_query_sql(string.format(cache_sql.select_name, common.mysqlEscapeString(name)))
+        if query_ret then
+            local query_obj = query_ret[1]
+            if query_obj then
+                playerid = query_obj.playerid
+                break
+            end
+        end
+    end
+    skynet.retpack(playerid)
+end
+
+local function day_event_func() --每天定时刷新
+    --每天执行一次完整gc
+    local mem = skynet.call(".launcher", "lua", "GC")
+    --LOG_ERROR("today memory %s", tostring(mem))
+end
+
+function CMD.open()
+    s_global = CacheGlobalData.new()
+    s_global:loaddb()
+
+    skynet.ret(skynet.pack(true))
+end
+
+skynet.init(function()
+    local CacheService = class("CacheService", ServiceBase)
+    function CacheService:service_init()
+        ServiceBase.service_init(self)
+        --s_global:cal_world_level()
+        local _,t = timext.system_refresh_time()
+        timext.reg_time_event(day_event_func, nil, t.hour, t.min, t.sec)
+    end
+    function CacheService:safe_quit_over()
+        ServiceBase.safe_quit_over(self)
+        local s = Database.get_dbservice()
+        skynet.call(s, "lua", "safe_quit")
+    end
+    local base = CacheService.new('cacheservice', -1)
+    base:start(CMD)
+    
+    --时钟
+    local function run()
+        for k,v in pairs(cache_timer_set) do
+            if v:expire() then
+                player_map[k] = nil
+                cache_timer_set[k] = nil
+            end
+        end
+    end
+    timext.open_clock(run)
+
+    local dbconfig = config.get_db_config()
+    local maxindex = #dbconfig.player - 1
+    for i=0,maxindex do
+        local db = Database.new("player", i) --检测数据库版本
+        playerdatabase[i] = db
+    end
+end)
+
+skynet.start(function()
+    skynet.dispatch("lua", function(session, source, cmd, ...)
+        local f = assert(CMD[cmd])
+        f(...)
+	end)
+end)

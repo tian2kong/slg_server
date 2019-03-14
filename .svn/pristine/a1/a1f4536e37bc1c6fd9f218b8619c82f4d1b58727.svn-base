@@ -1,0 +1,228 @@
+local shopcommon = require "shopcommon"
+local IPlayerModule = require "iplayermodule"
+local class = require "class"
+local thinginterface = require "thinginterface"
+local decode = table.decode
+local encode = table.encode
+local resource_type = require "resource_type"
+local timext = require "timext"
+local weightwrap = require "weightwrap"
+local Random = require "random"
+
+local PlayerShopModule = class("PlayerShopModule", IPlayerModule)
+
+--构造函数
+function PlayerShopModule:ctor(player)
+	self._player = player
+    self._record = nil
+    self.buytimes = {}
+    self.treasurekey = {}
+end
+
+local player_shop_tab = {
+    table_name = "player_shop",
+    key_name = {"playerid"},
+    field_name = {
+        "buytimes",     --限购物品购买次数
+        "treasurekey",		--珍宝商店
+    }
+}
+
+function PlayerShopModule:loaddb()    
+    self._record = self._player:getplayerdb():create_db_record(player_shop_tab, self._player:getplayerid())
+    self._record:syn_select()
+    if self._record:insert_flag() then
+    	self.buytimes = table.decode(self._record:get_field("buytimes")) or {}
+    	self.treasurekey = table.decode(self._record:get_field("treasurekey")) or {}
+    end
+end
+
+--存库
+function PlayerShopModule:savedb()
+	self._record:asyn_save()
+end
+
+function PlayerShopModule:init()
+
+end
+
+function PlayerShopModule:run(frame)
+  
+end
+
+--上线处理
+function PlayerShopModule:online()
+end
+
+--下线处理
+function PlayerShopModule:offline()
+
+end
+
+--系统每日刷新（5点刷新）
+function PlayerShopModule:dayrefresh()    
+	self:clear_times(shopcommon.DAY_BUY_TIMES)
+end
+
+--系统每周刷新
+function PlayerShopModule:weekrefresh()    
+	self:clear_times(shopcommon.WEEK_BUY_TIMES)
+end
+
+--买东西
+function PlayerShopModule:BuyItem(msg)
+	local key = msg["buykey"]
+	local count = msg["buycount"]
+	if count < 1 then 
+		return {result = shopcommon.COUNT_IS_ZERO}
+	end
+
+	local cfg = get_static_config().shop_item[key]
+	if not cfg then
+		return {result = shopcommon.NO_ITEM}
+	end
+
+	--次数错误
+	if count > cfg.maxbuycnt then
+		return {result = shopcommon.COUNT_IS_ZERO}
+	end
+
+	--判断购买时间
+	local curtime = timext.current_time()
+	if cfg.limitbegintime and curtime < cfg.limitbegintime then
+		return {result = shopcommon.NO_ITEM}
+	end
+	if cfg.limitendtime and curtime >= cfg.limitendtime then
+		return {result = shopcommon.NO_ITEM}
+	end
+
+	--判断购买次数
+	if cfg.buylimitnumber then
+		local times = self.buytimes[key] or 0
+		if times + count > cfg.buylimitnumber then
+			return {result = shopcommon.NOT_A_NUMBER_OF_TIMES}
+		end
+	end
+
+	--判断物品
+	local itemcfg, _ = thinginterface.thingconfig(cfg.itemid)
+	if not itemcfg then 
+		return {result = shopcommon.NO_ITEM}
+	end
+
+	--判断物品是否有效
+	if cfg.shopid == shopcommon.SHOP_TYPE_TREASURE then
+		if not self.treasurekey[key] then
+			return {result = shopcommon.NO_ITEM}
+		end
+	end
+
+	--判断价格
+	local tokenmodule = self._player:tokenmodule()
+	local price = table.copy(cfg.discountPrice or cfg.price, true)
+	local token, tokennum = table.first(price)
+	if self.treasurekey[key] then
+		tokennum = self.treasurekey[key]
+	end
+	if not tokenmodule:cansubtoken(token, tokennum * count) then
+		return {result = shopcommon.NO_MONEY}
+	end
+	
+	local rawinfo
+	local id,thingid
+	local bag = self._player:thingmodule():get_bag()  --获取主背包
+	if itemcfg.ExtData_UseOnBuy then --礼包
+		if not rewardlib.can_receive_award(self._player, itemcfg.ExtData_NewRewardId, count) then
+            return {result = shopcommon.BAG_FULL}
+        end
+		--真正扣钱
+		tokenmodule:subtoken(token, tokennum * count, object_action.action5017, cfg.shopid)
+
+		local rewardparam = {
+            id = itemcfg.ExtData_NewRewardId,
+            num = count,
+            type = nil,
+            action_id = object_action.action1014,
+            para = {
+            	cfg.shopid,	-- 商店 id
+            },
+        }
+        rawinfo = rewardlib.receive_award(self._player, rewardparam)
+		
+	else --物品
+		local thingcfg = {{
+			thingcfgid = cfg.itemid, 
+			amount = count, 
+			bind = cfg.bind == 1 or false,
+		}}
+
+			--空间判断
+		if not bag:canpush_plural_cfgthing(thingcfg) then
+			return {result =shopcommon.BAG_FULL}
+		end
+		--真正扣钱
+		tokenmodule:subtoken(token, tokennum * count, object_action.action5017, cfg.shopid)
+
+		--给物品
+		local param = {
+			action_id = object_action.action1014,
+			para = { cfg.shopid }
+		}
+		local _,_,_,chg = bag:push_plural_cfgthing(thingcfg, nil, param)
+		for k,thing in pairs(chg) do
+			if cfg.itemid == thing:getconfigid() then
+                thingid = thing:getthingid()
+                break
+            end
+		end
+		id = cfg.itemid
+	end
+
+	--加次数
+	if cfg.buylimitnumber then
+		self.buytimes[key] = (self.buytimes[key] or 0) + count
+		self._player:send_request("updateshopbuytimes", { info = {key = key, times = self.buytimes[key]} })
+		
+		self._record:set_field("buytimes", table.encode(self.buytimes))
+		self:savedb()
+	end
+
+	return {result = shopcommon.BUY_OK, thingcfgid = id, amount = count , reward = rawinfo, thingid = thingid}
+end
+
+--清除每日次数
+function PlayerShopModule:clear_times(_type)
+	local update = nil
+    for k,v in pairs(self.buytimes) do
+        local cfg = get_static_config().shop_item[tonumber(k)]
+        if not cfg or cfg.buylimittype == _type then
+            self.buytimes[k] = nil
+            update = true
+        end
+    end
+    if update then
+    	self:sync_buy_times()
+		self._record:set_field("buytimes", table.encode(self.buytimes))
+    	self:savedb()
+    end
+end
+
+function PlayerShopModule:sync_buy_times()
+	local ret = {}
+	for k,v in pairs(self.buytimes) do
+		table.insert(ret, {key = k, times = v})
+	end
+	self._player:send_request("retshopbuytimes", {info = ret})
+end
+
+function PlayerShopModule:sync_treasure()
+	local ret = {}
+	for k,v in pairs(self.treasurekey) do
+		table.insert(ret, {key = k, price = v})
+	end
+	self._player:send_request("synctreasureshop", {info = ret})
+end
+
+return PlayerShopModule
+
+

@@ -1,0 +1,23 @@
+local build_func ={
+{Function="Build_power",Index=1,Text="tid_functext_1",},
+{Function="Build_research",Index=2,Text="tid_functext_2",},
+{Function="Build_help",Index=3,Text="tid_functext_3",},
+{Function="Build_helparmynum",Index=4,Text="tid_functext_4",},
+{Function="Build_teamarmynum",Index=5,Text="tid_functext_5",},
+{Function="Build_soldier1num",Index=6,Text="tid_functext_6",},
+{Function="Build_soldier1time",Index=7,Text="tid_functext_7",},
+{Function="Build_soldier2num",Index=8,Text="tid_functext_8",},
+{Function="Build_soldier2time",Index=9,Text="tid_functext_9",},
+{Function="Build_soldier3num",Index=10,Text="tid_functext_10",},
+{Function="Build_soldier3time",Index=11,Text="tid_functext_11",},
+{Function="Build_soldier4num",Index=12,Text="tid_functext_12",},
+{Function="Build_soldier4time",Index=13,Text="tid_functext_13",},
+{Function="Build_waternum",Index=14,Text="tid_functext_14",},
+{Function="Build_watermax",Index=15,Text="tid_functext_15",},
+{Function="Build_foodnum",Index=16,Text="tid_functext_16",},
+{Function="Build_foodmax",Index=17,Text="tid_functext_17",},
+{Function="Build_ironnum",Index=18,Text="tid_functext_18",},
+{Function="Build_ironmax",Index=19,Text="tid_functext_19",},
+{Function="Build_gasnum",Index=20,Text="tid_functext_20",},
+{Function="Build_gasmax",Index=21,Text="tid_functext_21",}
+ } return build_func

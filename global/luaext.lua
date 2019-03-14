@@ -1,0 +1,370 @@
+local cjson = require "cjson"
+local cjson_safe = require "cjson.safe"
+local bson= require "bson"
+local Random = require "random"
+
+do
+    --设置稀疏数组是否当成结构体
+    cjson_safe.encode_sparse_array(true, 1, 1)
+end
+local decode = cjson_safe.decode
+local encode = cjson_safe.encode
+
+-- lua扩展
+
+--url编码解码
+function decodeURI(s)
+    s = string.gsub(s, '%%(%x%x)', function(h) return string.char(tonumber(h, 16)) end)
+    return s
+end
+
+function encodeURI(s)
+    s = string.gsub(s, "([^%w%.%- ])", function(c) return string.format("%%%02X", string.byte(c)) end)
+    return string.gsub(s, " ", "+")
+end
+
+-- table扩展
+
+--table格式，代替XML或者JSON来持久化的格式，较小[string1][string2]
+table.tinydataformat = function (t)
+    return table.concat(t, "#")
+end
+
+table.tinydatasplit = function (str)
+    return string.split(str, "#")
+end
+
+--cjson解码
+table.decode = function(str)
+	if not str or str == "" then 
+		return {}
+	end
+	local t, err = decode(str)
+    if not t then
+        LOG_ERROR("table decode[%s] error %s", tostring(str) or "nil", err)
+    end
+    --assert(t, err)
+	return t
+end
+--cjson编码
+table.encode = function(t)
+	if not t or table.empty(t) then
+		return ""
+	end
+	local str, err = encode(t)
+    if not str then
+        LOG_ERROR("table encode[%s] error %s", tostring(str) or "nil", err)
+    end
+    --assert(str, err)
+	return str
+end
+
+-- 返回table大小
+table.size = function(t)
+	local count = 0
+	for _ in pairs(t) do
+		count = count + 1
+	end
+	return count
+end
+
+-- 判断table是否为空
+table.empty = function(t)
+    return next(t) == nil
+end
+
+--取第一个元素 pairs遍历
+table.first = function(t)
+    for k,v in pairs(t) do
+        return k, v
+    end
+    return nil    
+end
+
+-- 返回table索引列表
+table.indices = function(t)
+    local result = {}
+    for k, v in pairs(t) do
+        table.insert(result, k)
+    end
+    return result
+end
+
+--查找value在t中的位置
+table.find = function(t, value)
+    for k,v in pairs(t) do
+        if v == value then
+            return k
+        end
+    end
+    return nil
+end
+
+-- 返回table值列表
+table.values = function(t)
+    local result = {}
+    for k, v in pairs(t) do
+        table.insert(result, v)
+    end
+    return result
+end
+
+-- 浅拷贝
+table.clone = function(t, nometa, result)
+    result = result or {}
+    if not nometa then
+        setmetatable(result, getmetatable(t))
+    end
+    for k, v in pairs (t) do
+        result[k] = v
+    end
+    return result
+end
+
+-- 深拷贝
+table.copy = function(t, nometa, result)   
+    result = result or {}
+
+    if not nometa then
+        setmetatable(result, getmetatable(t))
+    end
+
+    for k, v in pairs(t) do
+        if type(v) == "table" then
+            result[k] = table.copy(v)
+        else
+            result[k] = v
+        end
+    end
+    return result
+end
+
+--逆序遍历数组
+table.reverse = function(t)
+    if not t then
+        return nil
+    end
+    local t1 = {}
+    for k,v in pairs(t) do
+        table.insert(t1, k)
+    end
+    local function comp(v1, v2)
+        return v1 > v2
+    end
+    table.sort(t1, comp)
+    local index = 0
+    return function() index = index + 1 return t1[index], (t1[index] and t[t1[index]] or nil) end
+end
+
+-- string扩展
+
+-- 下标运算
+do
+    local mt = getmetatable("")
+    local _index = mt.__index
+
+    mt.__index = function (s, ...)
+        local k = ...
+        if "number" == type(k) then
+            return _index.sub(s, k, k)
+        else
+            return _index[k]
+        end
+    end
+end
+
+string.empty = function(str)
+    return string.len(str) == 0
+end
+
+string.split = function(szFullString, szSeparator)
+    local nFindStartIndex = 1
+    local nSplitIndex = 1
+    local nSplitArray = {}
+    while true do
+        local nFindLastIndex = string.find(szFullString, szSeparator, nFindStartIndex)
+        if not nFindLastIndex then
+            nSplitArray[nSplitIndex] = string.sub(szFullString, nFindStartIndex, string.len(szFullString))
+            break
+        end
+        nSplitArray[nSplitIndex] = string.sub(szFullString, nFindStartIndex, nFindLastIndex - 1)
+        nFindStartIndex = nFindLastIndex + string.len(szSeparator)
+        nSplitIndex = nSplitIndex + 1
+    end
+    return nSplitArray
+end
+
+string.ltrim = function(s, c)
+    local pattern = "^" .. (c or "%s") .. "+"
+    return (string.gsub(s, pattern, ""))
+end
+
+string.rtrim = function(s, c)
+    local pattern = (c or "%s") .. "+" .. "$"
+    return (string.gsub(s, pattern, ""))
+end
+
+string.trim = function(s, c)
+    return string.rtrim(string.ltrim(s, c), c)
+end
+
+--首字母大写
+string.capitalize = function(s)
+    return string.upper(s[1]) .. string.sub(s, 2)
+end
+
+do--打印table
+    local _tostring = tostring
+    local function dump(obj)
+        local getIndent, quoteStr, wrapKey, wrapVal, dumpObj
+        getIndent = function(level)
+            return string.rep("\t", level)
+        end
+        quoteStr = function(str)
+            return '"' .. string.gsub(str, '"', '\\"') .. '"'
+        end
+        wrapKey = function(val)
+            if type(val) == "number" then
+                return "[" .. val .. "]"
+            elseif type(val) == "string" then
+                return "[" .. quoteStr(val) .. "]"
+            else
+                return "[" .. _tostring(val) .. "]"
+            end
+        end
+        wrapVal = function(val, level)
+            if type(val) == "table" then
+                return dumpObj(val, level)
+            elseif type(val) == "number" then
+                return val
+            elseif type(val) == "string" then
+                return quoteStr(val)
+            else
+                return _tostring(val)
+            end
+        end
+        dumpObj = function(obj, level)
+            if type(obj) ~= "table" then
+                return wrapVal(obj)
+            end
+            level = level + 1
+            local tokens = {}
+            tokens[#tokens + 1] = "{"
+            for k, v in pairs(obj) do
+                tokens[#tokens + 1] = getIndent(level) .. wrapKey(k) .. " = " .. wrapVal(v, level) .. ","
+            end
+            tokens[#tokens + 1] = getIndent(level - 1) .. "}"
+            return table.concat(tokens, "\n")
+        end
+        return dumpObj(obj, 0)
+    end
+    local function _list_table(tb, table_list, level, nometa)
+        local ret = ""
+        local indent = string.rep(" ", level*4)
+
+        for k, v in pairs(tb) do
+            local quo = type(k) == "string" and "\"" or ""
+            ret = ret .. indent .. "[" .. quo .. _tostring(k) .. quo .. "] = "
+
+            if type(v) == "table" then
+                local t_name = table_list[v]
+                if t_name then
+                    ret = ret .. _tostring(v) .. " -- > [\"" .. t_name .. "\"]\n"
+                else
+                    table_list[v] = _tostring(k)
+                    ret = ret .. "{\n"
+                    ret = ret .. _list_table(v, table_list, level+1)
+                    ret = ret .. indent .. "}\n"
+                end
+            elseif type(v) == "string" then
+                ret = ret .. "\"" .. _tostring(v) .. "\"\n"
+            else
+                ret = ret .. _tostring(v) .. "\n"
+            end
+        end
+
+        local mt = getmetatable(tb)
+        if mt and not nometa then 
+            ret = ret .. "\n"
+            local t_name = table_list[mt]
+            ret = ret .. indent .. "<metatable> = "
+
+            if t_name then
+                ret = ret .. _tostring(mt) .. " -- > [\"" .. t_name .. "\"]\n"
+            else
+                ret = ret .. "{\n"
+                ret = ret .. _list_table(mt, table_list, level+1)
+                ret = ret .. indent .. "}\n"
+            end
+        
+        end
+
+       return ret
+    end
+    local function table_tostring(tb, nometa)
+        if type(tb) ~= "table" then
+            error("Sorry, it's not table, it is " .. type(tb) .. ".")
+        end
+
+        local ret = " = {\n"
+        local table_list = {}
+        table_list[tb] = "root table"
+        ret = ret .. _list_table(tb, table_list, 1, nometa)
+        ret = ret .. "}"
+        return ret
+    end
+    tostring = function(v, nometa)
+        if type(v) == 'table' then
+            return _tostring(v) .. table_tostring(v, true)
+        else
+            return _tostring(v)
+        end
+    end
+end
+
+printf = function(fmt, ...)
+    print(string.format(tostring(fmt), ...))
+end
+
+--处理有特殊字符的字符串: (长括号与string.format)
+string.quote = function(s)
+	--查找最长的等号序列
+	local n = -1
+	for w in string.gmatch(s, "]=*") do
+		n = math.max(n, #W - 1)
+	end
+	--产生 'n' + 1个等号
+	local eq = string.rep("=", n + 1)
+	--生成长字符串的字面表示
+	return string.format("[%s[\n%s]%s]", eq, s, eq)
+end
+
+-- math扩展
+do
+	local _floor = math.floor
+	math.floor = function(n, p)
+		if p and p ~= 0 then
+			local e = 10 ^ p
+			return _floor(n * e) / e
+		else
+			return _floor(n)
+		end
+	end
+end
+
+math.round = function(n, p)
+        local e = 10 ^ (p or 3)
+        return math.floor(n * e + 0.5) / e
+end
+
+math.randomext = function(m,n)
+    return Random.Get(m, n)
+end
+
+--创建一个调用闭包
+function handler(obj, func)
+    assert("function" == type(func), "handler error: the func is not a function!")
+    return function(...)
+        return func(obj, ...)
+    end
+end

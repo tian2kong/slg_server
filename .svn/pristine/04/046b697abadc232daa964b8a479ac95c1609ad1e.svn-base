@@ -1,0 +1,1 @@
+killall `pwd`/skynet/3rd/lua/lua
