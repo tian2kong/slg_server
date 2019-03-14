@@ -1,0 +1,81 @@
+thread = 4
+harbor = 0
+start = "cluster_game"	-- main script
+bootstrap = "snlua bootstrap"	-- The service for bootstrap
+cluster = nil
+
+--log
+logger = nil --"./log/%s_game_log"
+logpath = "./log/"
+log_dirname = "log"
+log_basename = "game"
+
+-- 用于加载LUA服务的LUA代码
+lualoader = "skynet/lualib/loader.lua"
+preload = "bootstrap/preload.lua"	-- run preload.lua before every lua service run
+
+-- LUA服务所在位置
+gameservice	= "./server/interaction/?.lua;" ..
+			  "./server/cache/?.lua;" ..
+			  "./server/service/?.lua;" ..
+			  "./server/?.lua;" ..
+			  "./server/common/?.lua;" ..
+			  "./server/player/?.lua;" ..
+			  "./server/image/?.lua;" ..
+			  "bootstrap/?.lua;" ..
+			  "./server/chat/?.lua;" ..
+			  "./server/mail/?.lua;" ..
+			  "./server/map/?.lua;" ..
+			  "./proto/?.lua;" ..
+			  "./server/login/?.lua;" ..
+			  "./server/gm/?.lua;" 
+			  
+luaservice = "skynet/service/?.lua;" .. gameservice
+snax = gameservice
+
+-- C编写的服务模块路径
+cpath = "skynet/cservice/?.so"
+
+-- 将添加到 package.path 中的路径，供 require 调用。
+lua_path = "skynet/lualib/?.lua;" .. 
+		   "skynet/lualib/snax/?.lua;" ..
+		   "skynet/lualib/compat10/?.lua;" ..
+		   "skynet/lualib/skynet/?.lua;" ..
+		   "skynet/lualib/skynet/db/?.lua;" ..
+		   "server/?.lua;" ..
+		   "global/?.lua;" .. 
+		   "proto/?.lua;" ..
+		   "server/service/?.lua;" ..
+		   "./server/image/?.lua;" ..
+		   "server/charge/?.lua;" ..
+		   "server/interaction/?.lua;" ..
+		   "server/token/?.lua;" ..
+		   "server/player/?.lua;" ..
+		   "config/?.lua;" ..
+		   "server/cache/?.lua;" ..
+		   "server/hero/?.lua;" ..
+		   "server/common/?.lua;" ..
+		   "server/?.lua;" ..
+		   "server/sql/?.lua;" ..
+		   "server/gm/?.lua;" ..
+		   "server/chat/?.lua;" ..
+		   "server/mail/?.lua;" ..
+		   "server/shop/?.lua;" ..
+		   "server/title/?.lua;" ..
+		   "server/map/?.lua;" ..
+		   "server/map/mapobject/?.lua;" ..
+		   "server/map/mask/?.lua;" ..
+		   "server/map/block/?.lua;" ..
+		   "server/map/march/?.lua;" ..
+		   "server/city/?.lua;" ..
+		   "server/login/?.lua;" ..
+		   "./server/worldserver/?.lua;" ..
+		   "server/thing/?.lua;" 
+		   
+
+
+-- 将添加到 package.cpath 中的路径，供 require 调用。
+lua_cpath = "skynet/luaclib/?.so;luaclib/?.so"
+
+-- 后台模式
+--daemon = "./skynet.pid"
